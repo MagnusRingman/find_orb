@@ -1,0 +1,73 @@
+What enabling KEPLERIAN_LINK actually does, measured.
+
+Sample:  4400 unnumbered objects drawn from UnnObs.txt, 400 in each of
+eleven strata, chosen on the observations actually present rather than on
+MPCORB's arc.  The hard strata are objects whose apparitions are far apart,
+split by inclination.  fo run both ways on each, one working directory and
+one config directory per run, settings stated explicitly in both arms.
+
+Arc recovered (fraction of the available arc the final fit accounts for):
+
+                                        base      ki
+  2 apparitions >4yr apart, high incl   0.853   0.863
+                            mid incl    0.802   0.812
+                            low incl    0.690   0.697
+  2 apparitions 1-4yr apart             0.907-0.973  unchanged
+  3 apparitions >4yr apart              0.835-0.876  unchanged
+  >=5 apparitions (control)             0.773   0.773
+  ------------------------------------------------------
+  mean                                  0.8488  0.8519
+  recovered >=90%                         3262    3277
+  recovered <10%                           343     330
+
+Elements, against MPCORB:
+
+                                        base      ki
+  full-arc fits agreeing                  3240    3246
+  full-arc fits disagreeing                 22      31
+
+So enabling it recovers the full arc on 14 objects the ordinary methods
+could not manage -- and eight of those fourteen come out wrong.  Net, it
+buys about six additional correct long-arc fits at the cost of about nine
+additional wrong ones.  That is not a good trade:  a confidently wrong
+orbit is worse than an admitted failure.  KEPLERIAN_LINK is therefore off
+by default, and should stay off until this is better.
+
+The gain is real but small, and the errors are what limit it.  Note that
+some fraction of MPC linkages are themselves wrong -- they are conservative
+but not infallible -- so a few of the 31 disagreements may be cases where
+the reference is at fault rather than the fit.  Not eight out of fourteen,
+though.
+
+Why it is not better is understood, and is not a fault in the linkage.  On
+2015 HG96 the linkage bridges 1490 days where the sub-arc search manages
+one day, and the orbit it produces is genuinely right:  node within 0.1
+degrees of MPCORB, inclination within 0.12, argument of perihelion within
+2.7, a within half a per cent.  But e is out by 0.017, and across a
+baseline that long those errors leave residuals of thousands of arcseconds
+-- far outside the range where the differential corrector's linearisation
+means anything.  It never converges, and reports back essentially the seed
+it was handed.  The linkage finds the right neighbourhood;  what is missing
+is a way to refine a seed from there over a long arc.
+
+Two candidate fixes were tried and neither worked:
+
+  A scan over mean anomaly.  This looked compelling -- the mean anomaly is
+  precisely the element the conservation laws leave free, which is why the
+  compatibility vector carries an l component at all, and ten degrees of it
+  would explain the residuals.  It does not:  scanning the full circle
+  leaves the best residual at 3900 arcseconds, and over the whole sample
+  the gains and the errors are unchanged, 33 and 23 either way.  The phase
+  is not what is wrong.
+
+  Handing the two ranges to herget_method() instead of handing over the
+  linkage's state vector.  What the Keplerian integrals really produce is a
+  pair of distances, and Herget builds a transfer orbit through both
+  observed directions exactly, which should remove the shape error.  In
+  practice herget_method() returned failure on every call and the fallback
+  stood, leaving the result bit-for-bit unchanged.  This was not chased
+  down.  max_herget_span() limits how long a transfer arc it will attempt,
+  but for r ~ 2 au that limit is around 2300 days and the baseline here was
+  1490, so the cause is elsewhere -- most likely get_real_arc() trimming an
+  observation set that is mostly excluded.  This is the most promising
+  thread left.
