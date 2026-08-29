@@ -152,7 +152,7 @@ endif
 
 OBJS=ades_out.o bc405.o bias.o collide.o conv_ele.o details.o eigen.o \
 	elem2tle.o elem_out.o elem_ou2.o ephem0.o errors.o expcalc.o gauss.o \
-	geo_pot.o healpix.o lsquare.o miscell.o monte0.o \
+	geo_pot.o healpix.o keplerian_link.o lsquare.o miscell.o monte0.o \
 	mpc_obs.o orb_func.o orb_fun2.o pl_cache.o roots.o  \
 	runge.o shellsor.o sigma.o simplex.o sm_vsop.o sr.o stackall.o
 
@@ -228,6 +228,9 @@ geo_test$(EXE):           geo_test.o geo_pot.o
 
 roottest$(EXE):           roottest.o roots.o
 	$(CXX) -o roottest$(EXE) roottest.o roots.o
+
+ki_test$(EXE):            ki_test.o keplerian_link.o
+	$(CXX) -o ki_test$(EXE) ki_test.o keplerian_link.o $(LIBS)
 
 neat_xvt$(EXE):           neat_xvt.o
 	$(CXX) -o neat_xvt$(EXE) neat_xvt.o
