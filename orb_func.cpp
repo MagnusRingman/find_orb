@@ -3511,11 +3511,13 @@ We look for both a maximum and a minimum;  the difference between
 them indicates how far out of the great-circle route the observations
 go.         */
 
-static inline double score_orbit_arc( const OBSERVE FAR *obs, const unsigned n_obs)
+static inline double score_orbit_arc( const OBSERVE FAR *obs, const unsigned n_obs,
+                                      const double count_weight)
 {
    const double five_degrees = PI * 5. / 180.;
    double xprod[3], minimum = 0., maximum = 0.;
    double max_dist = vector3_dist( obs[0].vect, obs[n_obs - 1].vect);
+   double rval;
    unsigned i;
 
    if( n_obs == 1)
@@ -3544,7 +3546,18 @@ static inline double score_orbit_arc( const OBSERVE FAR *obs, const unsigned n_o
       }
    if( max_dist > five_degrees)
       max_dist = five_degrees;
-   return( (maximum - minimum) * max_dist);
+   rval = (maximum - minimum) * max_dist;
+            /* The above says nothing about how well sampled the arc is : */
+            /* a window with twenty observations is a better bet than one */
+            /* with eight at similar curvature,  but they score the same. */
+            /* If SUBARC_COUNT_WEIGHT is set,  bias the score toward the  */
+            /* better sampled window;  zero (the default) multiplies by   */
+            /* exactly one and leaves the ranking as it was.  Note that a */
+            /* two-observation window scores zero either way,  having no  */
+            /* curvature to weigh.                                        */
+   if( count_weight)
+      rval *= pow( (double)n_obs, count_weight);
+   return( rval);
 }
 
 /* When looking for subarcs,  we want to look just for those that are less
@@ -3566,6 +3579,7 @@ static inline void look_for_best_subarc( const OBSERVE FAR *obs,
 {
    double best_score = -999., score;
    const double cos_45_deg = 1.414213 / 2.;
+   const double count_weight = atof( get_environment_ptr( "SUBARC_COUNT_WEIGHT"));
    int i = 0, j;
 
    *start = *end = 0;
@@ -3589,7 +3603,8 @@ static inline void look_for_best_subarc( const OBSERVE FAR *obs,
          temp_start++;
       while( temp_start < temp_end && (obs[temp_end].flags & OBS_DONT_USE))
          temp_end--;
-      score = score_orbit_arc( obs + temp_start, temp_end - temp_start + 1);
+      score = score_orbit_arc( obs + temp_start, temp_end - temp_start + 1,
+                                                            count_weight);
       if( score > best_score)
          {
          best_score = score;
