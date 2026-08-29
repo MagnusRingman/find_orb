@@ -1,0 +1,56 @@
+Evaluating the Keplerian-integral linkage against real astrometry.
+
+The question these answer is not "does fo get the right elements" but "does
+fo account for the arc it was given".  Element agreement hides the failure
+that matters:  on 1999 EO3, with 33 observations in 1999 and 283 in 2020-21,
+fo drops the 1999 apparition entirely and fits the recent one alone, yet
+still lands within 0.06% of MPCORB in a, because the recent apparition is by
+itself well observed.  The dropped apparition is visible only in the fitted
+arc.
+
+Pipeline, in order.  Paths to MPCORB.DAT and UnnObs.txt are hard-coded at the
+top of each script.
+
+  parse_mpcorb.py   > unn.tsv           unnumbered orbits, for reference
+                                        elements to score against
+  index_unnobs.py   > unnobs_index.tsv  one row per object describing the
+                                        observations that are actually there
+
+MPCORB cannot be used to choose the sample.  It is generated later than
+UnnObs.txt and knows about linkages the observation file does not:  2013 HA62
+is listed with 16 observations over 2013-2025, but UnnObs.txt holds only the
+eight from 2013.  Selecting on MPCORB's arc therefore mis-describes the input
+fo is given, so the strata come from the index instead.
+
+  select2.py N SEED > sample.tsv        stratified draw, biased toward
+                                        apparitions far apart, split by
+                                        inclination in the hard strata
+  extract2.py sample.tsv obsdir         one pass over UnnObs.txt (~30 s),
+                                        writing <desig>.obs per object
+  runner.py sample.tsv obsdir outdir RUNS WORKERS [base,ki]
+                                        runs fo both ways, several times, one
+                                        working and config directory per job
+  arcfrac.py sample.tsv outdir/runs.tsv     arc recovered, per stratum
+  elemcheck.py sample.tsv outdir/runs.tsv   whether the recovered arcs give
+                                            the right orbit
+
+Run elemcheck.py, not just arcfrac.py.  A linkage joining two apparitions
+that do not belong together recovers the arc exactly as well as a correct
+one:  an early version of this work gained 29 objects on the arc metric and
+had 19 of them wrong, which arcfrac.py alone reports as a clear win.
+
+Three ways fo will silently invalidate a comparison, all handled in
+runner.py and all of which produced a wrong answer here first:
+
+  - Settings persist into environ.dat, and reads try ~/.find_orb before
+    honouring -x, so one stray run with KEPLERIAN_LINK=1 enables it for
+    every later run including the controls.  Pass the setting explicitly in
+    both arms;  never rely on its absence.
+  - -x needs a trailing slash, or files land beside the directory rather
+    than in it.
+  - fo starts from a stored solution unless given -i, and seeds statistical
+    ranging from rand(), so about 5% of objects differ run to run.  Measure
+    that noise floor before believing any difference.
+
+Also:  fo asserts at fo.cpp:271 on partial files that were never created
+(-k skips it), and the input file must be argv[1], with switches after it.
