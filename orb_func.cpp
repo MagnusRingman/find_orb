@@ -110,6 +110,8 @@ void set_distance( OBSERVE FAR *obs, double r);             /* orb_func.c */
 double find_r_given_solar_r( const OBSERVE FAR *obs, const double solar_r);
 void attempt_extensions( OBSERVE *obs, const int n_obs, double *orbit,
                   const double epoch);                  /* orb_func.cpp */
+static bool try_seed_restart( OBSERVE *obs, const int n_obs, double *orbit,
+                  double *orbit_epoch);                 /* orb_func.cpp */
 double *get_asteroid_mass( const int astnum);   /* bc405.cpp */
 char *get_file_name( char *filename, const char *template_file_name);
 int compute_observer_loc( const double jde, const int planet_no,
@@ -4487,6 +4489,7 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
    fail_on_hitting_planet = false;
    orbit_epoch = obs[start].jd;
    attempt_extensions( obs, n_obs, orbit, orbit_epoch);
+   try_seed_restart( obs, n_obs, orbit, &orbit_epoch);
    if( n_radar_obs)
       {
       n_obs += n_radar_obs;
@@ -4790,6 +4793,25 @@ static int auto_reject_obs_within_arc( OBSERVE *obs, int n_obs)
    return( rval);
 }
 
+/* Once we've settled on a fitted arc,  the observations outside it and
+those rejected as outliers within it both end up with is_included = 0,
+and nothing downstream can tell them apart.  They mean quite different
+things,  though :  an observation outside the arc may simply never have
+been reached,  and a caller (an automated linkage pipeline,  say) may
+reasonably decide it's worth a second attempt.  So we mark them.       */
+
+static void mark_obs_outside_arc( OBSERVE *obs, const int n_obs,
+                                  const int start, const int end)
+{
+   int i;
+
+   for( i = 0; i < n_obs; i++)
+      if( i < start || i > end)
+         obs[i].flags |= OBS_OUTSIDE_ARC;
+      else
+         obs[i].flags &= ~OBS_OUTSIDE_ARC;
+}
+
 void attempt_extensions( OBSERVE *obs, int n_obs, double *orbit,
                                     const double epoch)
 {
@@ -4916,6 +4938,7 @@ void attempt_extensions( OBSERVE *obs, int n_obs, double *orbit,
       obs[i].is_included = 0;
    for( i = best_end + 1; i < n_obs; i++)
       obs[i].is_included = 0;
+   mark_obs_outside_arc( obs, n_obs, best_start, best_end);
 
                /* Perform up to four rounds of outlier rejection */
    for( i = 0; i < 4 && auto_reject_obs_within_arc( obs + best_start,
@@ -4951,6 +4974,119 @@ void attempt_extensions( OBSERVE *obs, int n_obs, double *orbit,
       shellsort_r( obs, n_obs, sizeof( OBSERVE), compare_observations, NULL);
       }
    set_locs( orbit, epoch, obs, n_obs);
+}
+
+/* initial_orbit( ) commits to the single highest-scoring sub-arc found by
+look_for_best_subarc( ),  and attempt_extensions( ) then grows the solution
+outward from that seed until an extension fails to converge.  Everything
+outside the resulting contiguous range is dropped,  and no second seed is
+ever tried.  For an object whose astrometry falls into several well-separated
+clumps (oppositions),  the winning seed can sit in a clump from which the
+extension cannot reach the rest of the arc;  the remaining observations,
+however numerous,  are then discarded.  The result is an orbit fitted to a
+minority of the data,  while a better orbit fitting most of it was reachable
+all along.
+
+   So :  if MAX_SEED_RESTARTS is non-zero,  we run the seed-and-extend
+pipeline a second time on the observations left outside the fitted arc,  and
+keep whichever solution includes more observations (ties broken by weighted
+rms).  The residue has to span at least SEED_RESTART_MIN_ARC days;  on a
+short arc,  a fit is under-determined enough that it's easily accepted for
+the wrong object.  Note that the default 20 days is also MAX_SR_SPAN,  so a
+residue that passes this test won't divert into the statistical-ranging
+branch of initial_orbit( ).
+
+   We work on a copy of the observations,  with the already-fitted arc marked
+OBS_DONT_USE so that initial_orbit( ) sorts it aside;  the original is
+touched only if the retry actually wins.  MAX_SEED_RESTARTS = 0 (the default)
+leaves the previous behaviour exactly as it was.        */
+
+static int seed_restart_depth = 0;
+
+static bool try_seed_restart( OBSERVE *obs, const int n_obs, double *orbit,
+                                                    double *orbit_epoch)
+{
+   const int max_restarts = atoi( get_environment_ptr( "MAX_SEED_RESTARTS"));
+   double min_arc = atof( get_environment_ptr( "SEED_RESTART_MIN_ARC"));
+   int i, first, last, n_outside = 0, n_primary = 0, n_retry = 0;
+   double rms_primary, rms_retry, retry_epoch, retry_orbit[6];
+   double first_jd = 0., last_jd = 0.;
+   const unsigned saved_perturbers = perturbers;
+   const int saved_available_sigmas = available_sigmas;
+   OBSERVE *sub;
+   bool rval = false;
+
+   if( seed_restart_depth >= max_restarts)
+      return( false);
+   if( !min_arc)
+      min_arc = 20.;
+   get_first_and_last_included_obs( obs, n_obs, &first, &last);
+   for( i = 0; i < n_obs; i++)
+      if( i < first || i > last)
+         {
+         if( !n_outside)
+            first_jd = obs[i].jd;
+         last_jd = obs[i].jd;
+         n_outside++;
+         }
+                /* Need at least three observations to seed a Gauss solution, */
+                /* and enough of a span that the result means something :     */
+   if( n_outside < 3 || last_jd - first_jd < min_arc)
+      return( false);
+   for( i = 0; i < n_obs; i++)
+      n_primary += (obs[i].is_included & 1);
+   rms_primary = compute_weighted_rms( obs, n_obs, NULL);
+   if( debug_level)
+      debug_printf( "Seed restart: %d obs outside arc, %f day span\n",
+                     n_outside, last_jd - first_jd);
+
+   sub = (OBSERVE *)calloc( n_obs, sizeof( OBSERVE));
+   assert( sub);
+            /* NB shallow copy :  'sub' shares second_line,  obs_details and */
+            /* ades_ids with the original,  so it gets free( )d,  never      */
+            /* unload_observations( )ed.                                     */
+   memcpy( sub, obs, n_obs * sizeof( OBSERVE));
+   for( i = 0; i < n_obs; i++)
+      if( i < first || i > last)
+         sub[i].is_included = 1;
+      else
+         {           /* the arc we already fitted;  set aside,  and not */
+         sub[i].flags |= OBS_DONT_USE;      /* counted as part of the   */
+         sub[i].is_included = 0;            /* retry's solution         */
+         }
+   seed_restart_depth++;
+   retry_epoch = initial_orbit( sub, n_obs, retry_orbit);
+   seed_restart_depth--;
+            /* initial_orbit( ) re-sorts by date before returning,  so 'sub' */
+            /* comes back index-aligned with the original :                  */
+   for( i = 0; i < n_obs; i++)
+      n_retry += (sub[i].is_included & 1);
+   rms_retry = compute_weighted_rms( sub, n_obs, NULL);
+   if( debug_level)
+      debug_printf( "   primary %d obs rms %f;  retry %d obs rms %f\n",
+                     n_primary, rms_primary, n_retry, rms_retry);
+   if( n_retry > n_primary
+             || (n_retry == n_primary && rms_retry < rms_primary))
+      {
+      memcpy( obs, sub, n_obs * sizeof( OBSERVE));
+      for( i = first; i <= last; i++)      /* undo our temporary marking */
+         obs[i].flags &= ~OBS_DONT_USE;
+      get_first_and_last_included_obs( obs, n_obs, &first, &last);
+      mark_obs_outside_arc( obs, n_obs, first, last);
+      memcpy( orbit, retry_orbit, 6 * sizeof( double));
+      *orbit_epoch = retry_epoch;
+      rval = true;
+      if( debug_level)
+         debug_printf( "   restart wins\n");
+      }
+   else        /* keep the original solution;  'obs' was never modified, */
+      {        /* but the retry will have trampled on some globals :     */
+      perturbers = saved_perturbers;
+      available_sigmas = saved_available_sigmas;
+      set_locs( orbit, *orbit_epoch, obs, n_obs);
+      }
+   free( sub);
+   return( rval);
 }
 
 #define is_power_of_two( X)   (!((X) & ((X) - 1)))

@@ -244,6 +244,27 @@ VECTOR_OPTS=0,1,1
 
 COMET_CONSTANTS=2.808,2.15,5.093,4.6142
 
+   Initial orbit determination picks the single best-scoring sub-arc as its
+   seed,  extends the solution outward from it until an extension fails,  and
+   drops everything outside the arc it ended up with.  For an object observed
+   in several well-separated clumps,  the seed can land in a clump from which
+   the extension can't reach the rest of the data;  those observations are
+   then discarded and no second seed is tried,  so you can get an orbit fitted
+   to a minority of the astrometry when a better one was within reach.
+
+   Set MAX_SEED_RESTARTS to a non-zero value,  and Find_Orb will run the
+   seed-and-extend search again on the observations left outside the fitted
+   arc,  keeping whichever solution uses more observations (ties broken by
+   weighted rms).  The value is the number of times it may do this;  each
+   restart works on what the previous one left over.  Zero (the default)
+   gives the original behaviour.
+
+   The left-over observations have to span at least SEED_RESTART_MIN_ARC days
+   before a restart is attempted (default 20).  On a shorter arc,  the fit is
+   loose enough that it'll happily accept the wrong object.
+MAX_SEED_RESTARTS=0
+SEED_RESTART_MIN_ARC=20
+
    Initial orbit determination (IOD) usually takes a couple of seconds.
    For longer arcs,  it might take five or ten seconds.  If it takes more
    than IOD_TIMEOUT seconds (defaults to 20),  we stop looking for a better
