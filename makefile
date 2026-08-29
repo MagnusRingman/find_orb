@@ -256,6 +256,7 @@ clean:
 	$(RM) $(FIND_ORB_OBJS) cssfield.o neat_xvt.o neat_xvt$(EXE)
 	$(RM) prefix.h PREFIX
 	$(RM) geo_test.o geo_test geo_max.o geo_max
+	$(RM) ki_test.o ki_test$(EXE)
 ifdef RES_FILENAME
 	$(RM) $(RES_FILENAME)
 
