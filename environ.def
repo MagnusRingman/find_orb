@@ -244,6 +244,16 @@ VECTOR_OPTS=0,1,1
 
 COMET_CONSTANTS=2.808,2.15,5.093,4.6142
 
+   Candidate IOD seed arcs are ranked by how far they depart from a great
+   circle,  times their angular extent.  That says nothing about how well
+   sampled they are,  so a window with eight observations can outrank one
+   with twenty at similar curvature,  even though the latter is the better
+   bet.  Set SUBARC_COUNT_WEIGHT to a positive value and the score is
+   multiplied by (number of observations) raised to that power :  0.5 ranks
+   by the square root of the count,  1 in proportion to it.  Zero (the
+   default) multiplies by one and leaves the ranking exactly as it was.
+SUBARC_COUNT_WEIGHT=0
+
    Initial orbit determination (IOD) usually takes a couple of seconds.
    For longer arcs,  it might take five or ten seconds.  If it takes more
    than IOD_TIMEOUT seconds (defaults to 20),  we stop looking for a better
