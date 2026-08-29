@@ -764,8 +764,18 @@ int main( int argc, const char **argv)
                else
                   total_objects = atoi( arg);
                break;
+            case '-':
+               if( !strcmp( argv[i], "--no-fit"))
+                  {
+                  extern bool skip_full_improvement;
+                  skip_full_improvement = true;
+                  }
+               break;
             case 'V':
-               use_colors = false;
+               {
+               extern bool skip_full_improvement;
+               skip_full_improvement = true;
+               }
                break;
             case 'v':
                if( !*arg)
@@ -875,8 +885,7 @@ int main( int argc, const char **argv)
          break;       /* break out of loop,  signalling we're a parent */
       process_count++;
       }
-   if( n_processes > 1)
-      process_count++;
+   process_count++;
    if( show_processing_steps)
       printf( "Process count %d\n", process_count);
 #endif

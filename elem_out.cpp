@@ -3287,6 +3287,7 @@ void reset_sr_orbits( void)
 const char *state_vect_text = NULL;
 int ignore_prev_solns;
 bool take_first_soln = false, force_final_full_improvement = false;
+bool skip_full_improvement = false;
 int n_extra_full_steps = 0;
 
 static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit,
@@ -3306,6 +3307,14 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
       *orbit_epoch = extract_state_vect_from_text(
                   state_vect_text, orbit, &abs_mag);
       got_vectors = (*orbit_epoch != 0.);
+      for( i = 0; got_vectors && i < 6; i++)
+         if( orbit[i] != orbit[i]) /* Catch NaNs */
+            got_vectors = 0;
+      if( !got_vectors)
+         {
+         fprintf( stderr, "ERROR: failed to parse/evaluate orbital elements from '-v'\n");
+         exit( -1);
+         }
       if( got_vectors)
          push_orbit( *orbit_epoch, orbit);
       }
@@ -3362,7 +3371,7 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
          do_full_improvement = true;
    *epoch_shown = *orbit_epoch;
    assert( n_obs > 0 && n_obs < 100000);
-   if( do_full_improvement || available_sigmas == NO_SIGMAS_AVAILABLE)
+   if( !skip_full_improvement && (do_full_improvement || available_sigmas == NO_SIGMAS_AVAILABLE))
       {
       extern double automatic_outlier_rejection_limit;
       OBSERVE *saved_obs = (OBSERVE *)calloc( n_obs, sizeof( OBSERVE));
