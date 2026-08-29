@@ -442,3 +442,328 @@ int link2( LINK2_ROOT *roots, const int max_roots, const ATTRIBUTABLE *a1,
       }
    return( n_roots);
 }
+
+/* 'Link3':  joining three attributables.
+
+   Gronchi's second method (section 5 of arXiv:2111.02406,  from Gronchi,
+   Bau & Maro 2017) needs only conservation of angular momentum.  There is
+   no energy,  no Laplace-Lenz vector,  no auxiliary variable z and no
+   radical anywhere in it,  which makes it markedly simpler than Link2.
+
+   Writing c_i = c_j for each of the three pairs and projecting onto
+   D_i x D_j eliminates both radial velocities,  exactly as in Link2,  and
+   leaves one conic per pair,  each in only two of the three ranges:
+
+      q_01(rho0, rho1) = 0,  q_12(rho1, rho2) = 0,  q_20(rho2, rho0) = 0
+
+   Three quadratics in three unknowns have at most 2 * 2 * 2 = 8 common
+   solutions,  which is exactly the degree of the univariate polynomial
+   the paper reaches by taking two resultants in succession.  We do not
+   form that polynomial:  marching in rho1 gives rho0 from the first conic
+   and rho2 from the second -- each an ordinary quadratic with two
+   branches -- and we look for sign changes of the third conic over the
+   four branch combinations.  That avoids building resultant coefficients,
+   which involve heavy cancellation.
+
+   The system has a spurious family of solutions with c_j = 0 at every
+   epoch:  an object moving in a straight line through the sun.  Those
+   satisfy c_1 = c_2 = c_3 trivially and must be discarded.  They can be
+   written down in closed form,  one range per attributable,  which is
+   what straight_line_rho() below provides.        */
+
+static void compute_pair( LINK3_PAIR *pair, const double *di, const double *ei,
+             const double *fi, const double *gi, const double *dj,
+             const double *ej, const double *fj, const double *gj)
+{
+   double dg[3];
+   int i;
+
+   vector_cross_product( pair->w, di, dj);
+   pair->wlen2 = dot_product( pair->w, pair->w);
+   vector_cross_product( pair->di_x_w, di, pair->w);
+   for( i = 0; i < 3; i++)
+      dg[i] = gj[i] - gi[i];
+   pair->ca =  dot_product( ej, pair->w);
+   pair->cc =  dot_product( fj, pair->w);
+   pair->cb = -dot_product( ei, pair->w);
+   pair->cd = -dot_product( fi, pair->w);
+   pair->ce =  dot_product( dg, pair->w);
+}
+
+int link3_setup( LINK3_DATA *ld, const ATTRIBUTABLE *a0,
+                 const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2)
+{
+   int k;
+
+   ld->a[0] = a0;
+   ld->a[1] = a1;
+   ld->a[2] = a2;
+   for( k = 0; k < 3; k++)
+      compute_defg( ld->a[k], ld->d[k], ld->e[k], ld->f[k], ld->g[k]);
+   for( k = 0; k < 3; k++)
+      {
+      const int j = (k + 1) % 3;
+
+      compute_pair( ld->pair + k, ld->d[k], ld->e[k], ld->f[k], ld->g[k],
+                                  ld->d[j], ld->e[j], ld->f[j], ld->g[j]);
+      if( ld->pair[k].wlen2 == 0.)     /* D_i parallel to D_j */
+         return( -1);
+      }
+                  /* Gronchi's condition (D1 x D2) . D3 != 0 :  without it
+                     the six projections no longer imply c1 = c2 = c3.   */
+   ld->triple_product = dot_product( ld->pair[0].w, ld->d[2]);
+   if( ld->triple_product == 0.)
+      return( -2);
+   return( 0);
+}
+
+/* The conic belonging to pair 'pair_idx',  which joins attributable
+   pair_idx to attributable (pair_idx + 1) mod 3.  'ri' is the range at
+   the first of those,  'rj' the range at the second.        */
+
+double link3_conic( const LINK3_DATA *ld, const int pair_idx,
+                                const double ri, const double rj)
+{
+   const LINK3_PAIR *p = ld->pair + pair_idx;
+
+   return( p->ca * rj * rj + p->cc * rj + p->cb * ri * ri + p->cd * ri + p->ce);
+}
+
+static int solve_quadratic( const double a, const double b, const double c,
+                                                            double *roots)
+{
+   if( fabs( a) < 1e-300)
+      {
+      if( fabs( b) < 1e-300)
+         return( 0);
+      roots[0] = -c / b;
+      return( 1);
+      }
+   else
+      {
+      const double discr = b * b - 4. * a * c;
+
+      if( discr < 0.)
+         return( 0);
+      else
+         {
+         const double sqrt_discr = sqrt( discr);
+
+         roots[0] = (-b - sqrt_discr) / (2. * a);
+         roots[1] = (-b + sqrt_discr) / (2. * a);
+         return( 2);
+         }
+      }
+}
+
+/* Given rho at the second attributable of a pair,  solve that pair's conic
+   for rho at the first;  and vice versa.                    */
+
+static int solve_pair_for_i( const LINK3_DATA *ld, const int pair_idx,
+                                     const double rj, double *ri)
+{
+   const LINK3_PAIR *p = ld->pair + pair_idx;
+
+   return( solve_quadratic( p->cb, p->cd,
+                            p->ca * rj * rj + p->cc * rj + p->ce, ri));
+}
+
+static int solve_pair_for_j( const LINK3_DATA *ld, const int pair_idx,
+                                     const double ri, double *rj)
+{
+   const LINK3_PAIR *p = ld->pair + pair_idx;
+
+   return( solve_quadratic( p->ca, p->cc,
+                            p->cb * ri * ri + p->cd * ri + p->ce, rj));
+}
+
+/* rhodot at the _second_ attributable of a pair,  which is what the
+   projection onto D_i x (D_i x D_j) gives.  Each of the three radial
+   velocities therefore comes from a different pair:  rhodot_1 from pair
+   (0,1),  rhodot_2 from (1,2),  rhodot_0 from (2,0).
+
+   Note that the Link3 section of arXiv:2111.02406 gives this assignment,
+   while its Link2 section gives the opposite one;  the two sections
+   contradict each other,  and this is the version that conserves angular
+   momentum.  See the comment on link2_setup().     */
+
+static double pair_rhodot( const LINK3_DATA *ld, const int pair_idx,
+                                     const double ri, const double rj)
+{
+   const LINK3_PAIR *p = ld->pair + pair_idx;
+   const int i = pair_idx, j = (pair_idx + 1) % 3;
+   double jvect[3];
+   int k;
+
+   for( k = 0; k < 3; k++)
+      jvect[k] = ld->e[j][k] * rj * rj - ld->e[i][k] * ri * ri
+               + ld->f[j][k] * rj      - ld->f[i][k] * ri
+               + ld->g[j][k]           - ld->g[i][k];
+   return( dot_product( jvect, p->di_x_w) / p->wlen2);
+}
+
+void link3_states( const LINK3_DATA *ld, const double *rho, double *states)
+{
+   double rhodot[3];
+   int k;
+
+   for( k = 0; k < 3; k++)
+      rhodot[(k + 1) % 3] = pair_rhodot( ld, k, rho[k], rho[(k + 1) % 3]);
+   for( k = 0; k < 3; k++)
+      {
+      const ATTRIBUTABLE *a = ld->a[k];
+      double *state = states + k * 6;
+      int i;
+
+      for( i = 0; i < 3; i++)
+         {
+         state[i]     = a->q[i] + rho[k] * a->u[i];
+         state[i + 3] = a->qdot[i] + rhodot[k] * a->u[i] + rho[k] * a->eta[i];
+         }
+      }
+}
+
+/* The zero-angular-momentum ('straight line') solution for one
+   attributable,  in closed form.  With
+   u = q - (q.e_rho) e_rho - (q.eta) eta / |eta|^2  orthogonal to both
+   e_rho and eta,  we get lambda = (qdot.u)/|u|^2 and then rho directly.
+   A root matching this at all three epochs is spurious.       */
+
+double straight_line_rho( const ATTRIBUTABLE *attr)
+{
+   const double eta2 = dot_product( attr->eta, attr->eta);
+   const double q_dot_u = dot_product( attr->q, attr->u);
+   const double q_dot_eta = dot_product( attr->q, attr->eta);
+   double uvect[3], tvect[3], lambda;
+   int i;
+
+   if( eta2 == 0.)
+      return( 0.);
+   for( i = 0; i < 3; i++)
+      uvect[i] = attr->q[i] - q_dot_u * attr->u[i]
+                           - q_dot_eta * attr->eta[i] / eta2;
+   lambda = dot_product( attr->qdot, uvect) / dot_product( uvect, uvect);
+   for( i = 0; i < 3; i++)
+      tvect[i] = lambda * attr->q[i] - attr->qdot[i];
+   return( dot_product( tvect, attr->eta) / eta2);
+}
+
+static void fill_in_root( const LINK3_DATA *ld, LINK3_ROOT *root,
+                                              const double *rho)
+{
+   double c[3][3];
+   int k;
+
+   memcpy( root->rho, rho, 3 * sizeof( double));
+   link3_states( ld, rho, root->state[0]);
+   for( k = 0; k < 3; k++)
+      vector_cross_product( c[k], root->state[k], root->state[k] + 3);
+   root->c_len = vector3_length( c[0]);
+   root->max_c_err = 0.;
+   for( k = 0; k < 3; k++)
+      {
+      const int j = (k + 1) % 3;
+      int i;
+
+      for( i = 0; i < 3; i++)
+         if( root->max_c_err < fabs( c[k][i] - c[j][i]))
+            root->max_c_err = fabs( c[k][i] - c[j][i]);
+      }
+}
+
+/* Residual of the third conic,  for a given rho1 and a choice of branch
+   on each of the first two conics.  Returns zero if that branch pair does
+   not exist at this rho1.                                    */
+
+static int link3_residual( const LINK3_DATA *ld, const double rho1,
+          const int branch0, const int branch2, double *resid, double *rho)
+{
+   double r0[2], r2[2];
+
+   if( solve_pair_for_i( ld, 0, rho1, r0) <= branch0)
+      return( 0);
+   if( solve_pair_for_j( ld, 1, rho1, r2) <= branch2)
+      return( 0);
+   rho[0] = r0[branch0];
+   rho[1] = rho1;
+   rho[2] = r2[branch2];
+   *resid = link3_conic( ld, 2, rho[2], rho[0]);
+   return( 1);
+}
+
+int link3( LINK3_ROOT *roots, const int max_roots, const ATTRIBUTABLE *a0,
+        const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2,
+        const double rho_min, const double rho_max)
+{
+   LINK3_DATA ld;
+   const int n_steps = 8000;
+   int i, branch0, branch2, n_roots = 0;
+
+   if( link3_setup( &ld, a0, a1, a2))
+      return( -1);
+   for( branch0 = 0; branch0 < 2; branch0++)
+      for( branch2 = 0; branch2 < 2; branch2++)
+         {
+         double prev_resid = 0., prev_rho1 = 0.;
+         int have_prev = 0;
+
+         for( i = 0; i <= n_steps; i++)
+            {
+            const double frac = (double)i / (double)n_steps;
+            const double rho1 = rho_min * exp( frac * log( rho_max / rho_min));
+            double resid, rho[3];
+
+            if( !link3_residual( &ld, rho1, branch0, branch2, &resid, rho))
+               {
+               have_prev = 0;
+               continue;
+               }
+            if( have_prev && (resid < 0.) != (prev_resid < 0.)
+                                          && n_roots < max_roots)
+               {
+               double lo = prev_rho1, hi = rho1;
+               int iter;
+
+               for( iter = 0; iter < 100; iter++)
+                  {
+                  const double mid = (lo + hi) * .5;
+                  double mid_resid, mid_rho[3];
+
+                  if( !link3_residual( &ld, mid, branch0, branch2,
+                                                &mid_resid, mid_rho))
+                     break;
+                  if( (mid_resid < 0.) == (prev_resid < 0.))
+                     lo = mid;
+                  else
+                     hi = mid;
+                  }
+               if( link3_residual( &ld, (lo + hi) * .5, branch0, branch2,
+                                                        &resid, rho))
+                  {
+                  LINK3_ROOT troot;
+                  int is_dup = 0, k;
+
+                  for( k = 0; k < n_roots; k++)
+                     if( fabs( roots[k].rho[0] - rho[0]) < 1e-4
+                      && fabs( roots[k].rho[1] - rho[1]) < 1e-4
+                      && fabs( roots[k].rho[2] - rho[2]) < 1e-4)
+                        is_dup = 1;
+                  fill_in_root( &ld, &troot, rho);
+                     /* Where the two branches of a conic merge -- at a zero
+                        of its discriminant -- the branch ordering swaps and
+                        the residual jumps.  Bisection then converges on that
+                        discontinuity rather than on a root.  A true root
+                        conserves angular momentum to rounding,  so test that
+                        rather than the residual,  which has no natural
+                        scale.                                          */
+                  if( !is_dup && troot.max_c_err < 1e-8 * troot.c_len + 1e-12)
+                     roots[n_roots++] = troot;
+                  }
+               }
+            prev_resid = resid;
+            prev_rho1 = rho1;
+            have_prev = 1;
+            }
+         }
+   return( n_roots);
+}

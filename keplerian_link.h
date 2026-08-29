@@ -61,8 +61,47 @@ typedef struct
    double max_c_err;                /* |c1 - c2|,  should be at rounding level */
 } LINK2_ROOT;
 
+/* 'Link3' joins three attributables using conservation of angular momentum
+   alone.  Each of the three pairs (0,1), (1,2), (2,0) contributes one conic
+   in two of the ranges;  the three conics in three unknowns admit at most
+   2 * 2 * 2 = 8 solutions,  which is the degree of the univariate
+   polynomial Gronchi obtains by a double resultant.               */
+
+typedef struct
+{
+   double w[3];              /* D_i x D_j */
+   double wlen2;             /* |D_i x D_j|^2 */
+   double di_x_w[3];         /* D_i x (D_i x D_j);  yields rhodot_j */
+   double ca, cb, cc, cd, ce;   /* conic: ca rj^2 + cc rj + cb ri^2 + cd ri + ce */
+} LINK3_PAIR;
+
+typedef struct
+{
+   const ATTRIBUTABLE *a[3];
+   double d[3][3], e[3][3], f[3][3], g[3][3];
+   LINK3_PAIR pair[3];       /* pair[k] joins attributable k to k + 1 mod 3 */
+   double triple_product;    /* D1 x D2 . D3;  must be nonzero */
+} LINK3_DATA;
+
+typedef struct
+{
+   double rho[3];
+   double state[3][6];       /* heliocentric,  AU and AU/day */
+   double max_c_err;         /* largest |c_i - c_j| */
+   double c_len;             /* |c|;  ~0 for the spurious straight-line root */
+} LINK3_ROOT;
+
 int compute_attributable( ATTRIBUTABLE *attr, const OBSERVE FAR *obs,
                                                     const int n_obs);
+int link3_setup( LINK3_DATA *ld, const ATTRIBUTABLE *a0,
+                 const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2);
+double link3_conic( const LINK3_DATA *ld, const int pair_idx,
+                                const double ri, const double rj);
+void link3_states( const LINK3_DATA *ld, const double *rho, double *states);
+double straight_line_rho( const ATTRIBUTABLE *attr);
+int link3( LINK3_ROOT *roots, const int max_roots, const ATTRIBUTABLE *a0,
+        const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2,
+        const double rho_min, const double rho_max);
 int link2_setup( LINK2_DATA *ld, const ATTRIBUTABLE *a1,
                                  const ATTRIBUTABLE *a2);
 double link2_conic( const LINK2_DATA *ld, const double rho1, const double rho2);
