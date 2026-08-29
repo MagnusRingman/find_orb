@@ -3103,6 +3103,11 @@ static double extract_state_vect_from_text( const char *text,
          coord_epoch = atof( text + 3);
       else if( !memcmp( text, "H=", 2))
          *abs_mag = atof( text + 2);
+      else if( !memcmp( text, "G=", 2))
+         {
+         extern double asteroid_magnitude_slope_param;
+         asteroid_magnitude_slope_param = atof( text + 2);
+         }
       else if( !memcmp( text, "Om=", 3))
          elem.asc_node = atof( text + 3) * PI / 180.;
       else if( !memcmp( text, "om=", 3))
@@ -3428,6 +3433,15 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
             }
          }
       free( saved_obs);
+      }
+   else if( skip_full_improvement )
+      {
+      extern double override_abs_mag;
+
+      set_locs( orbit, *orbit_epoch, obs, n_obs);
+      override_abs_mag = abs_mag;
+      calc_absolute_magnitude( obs, n_obs);
+      override_abs_mag = 0.;
       }
                /* if a stored solution failed (i.e.,  didn't get sigmas), */
                /* we try again,  ignoring the stored solution.            */
