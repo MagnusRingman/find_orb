@@ -171,14 +171,24 @@ typedef struct
    double epoch;              /* zero if nothing was found */
    double orbit[6];           /* heliocentric,  AU and AU/day */
    double chi2;               /* compatibility chi^2 of the chosen root */
+   double baseline;           /* days between the first and last tracklet */
    int n_tracklets;           /* three for Link3,  two for Link2 */
    int first_obs, n_obs_used; /* the observations actually used */
 } KEPLERIAN_LINK_RESULT;
 
+/* 'chi2_max' is the threshold below which a linkage counts as acceptable.
+   Among acceptable windows we take the one with the longest baseline,  not
+   the one with the smallest chi^2.  Those are very different choices:  two
+   tracklets a night apart are compatible with almost any orbit and score a
+   superb chi^2 while telling us nothing,  so selecting on chi^2 alone picks
+   out precisely the linkages with no leverage.  Ranking by baseline and
+   using chi^2 only as an admission test asks the question we actually care
+   about -- what is the longest arc these observations will support?     */
+
 int keplerian_link_orbit( KEPLERIAN_LINK_RESULT *result,
              const OBSERVE FAR *obs, const int n_obs,
              const double max_tracklet_gap, const double max_span,
-             const double rho_max);
+             const double rho_max, const double chi2_max);
 int link2_setup( LINK2_DATA *ld, const ATTRIBUTABLE *a1,
                                  const ATTRIBUTABLE *a2);
 double link2_conic( const LINK2_DATA *ld, const double rho1, const double rho2);

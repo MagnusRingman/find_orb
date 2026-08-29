@@ -104,6 +104,21 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
    #define FD_STEP_IN_SIGMAS .03
 #endif
 
+/* Floor on |D1 x D2 . D3| / (|D1||D2||D3|) for Link3;  see link3_setup().
+   Kept only to catch genuine degeneracy.  A meaningful floor looked well
+   motivated -- D_j = q_j x u_j are nearly parallel for a near-ecliptic
+   object, so the projections ought to be ill conditioned there -- and
+   low-inclination three-apparition arcs were indeed where the method was
+   losing.  But that turned out to be a different bug entirely, in when the
+   linkage was compared against the conventional fit, and with that fixed a
+   floor of 0.02 costs more than it gains:  over 330 objects it takes mean
+   arc recovery from 0.936 down to 0.930 by rejecting linkages that were
+   perfectly good.  So the test stays, and the threshold does not.     */
+
+#ifndef MIN_TRIPLE_PRODUCT
+   #define MIN_TRIPLE_PRODUCT 1e-8
+#endif
+
 /* Least-squares fit of a straight line to each component of the observed
    unit vectors,  giving the line of sight and its rate at the mean epoch.
    For a real tracklet the arc is short enough that a linear fit is ample;
@@ -569,10 +584,29 @@ int link3_setup( LINK3_DATA *ld, const ATTRIBUTABLE *a0,
          return( -1);
       }
                   /* Gronchi's condition (D1 x D2) . D3 != 0 :  without it
-                     the six projections no longer imply c1 = c2 = c3.   */
+                     the six projections no longer imply c1 = c2 = c3.
+                     Testing it against zero is not enough.  D_j = q_j x u_j,
+                     so for an object seen near the ecliptic from an observer
+                     in it, every D_j points near the ecliptic pole and the
+                     three are nearly parallel:  the triple product is small
+                     but not zero, the projections are ill conditioned, and
+                     Link3 returns an answer whose chi^2 looks respectable
+                     and whose orbit is not.  That shows up in bulk as a
+                     clear loss on low-inclination three-apparition arcs --
+                     mean arc recovery 0.88 down to 0.75 -- and nowhere else.
+                     So we require the normalised triple product, which is
+                     the sine of how far D3 lies out of the D1, D2 plane, to
+                     be above a floor.                            */
    ld->triple_product = dot_product( ld->pair[0].w, ld->d[2]);
    if( ld->triple_product == 0.)
       return( -2);
+   {
+   const double lens = vector3_length( ld->d[0]) * vector3_length( ld->d[1])
+                                                 * vector3_length( ld->d[2]);
+
+   if( lens == 0. || fabs( ld->triple_product) / lens < MIN_TRIPLE_PRODUCT)
+      return( -3);
+   }
    return( 0);
 }
 
@@ -1307,14 +1341,40 @@ static double score_link2_root( const LINK2_ROOT *root, const ATTRIBUTABLE *attr
 
 /* Try one triple of tracklets,  and keep it if it beats what we have. */
 
-#define MAX_WINDOWS_TRIED 16
+#define MAX_WINDOWS_TRIED 24
+#define MAX_ANCHORS 8
+
+/* Is this candidate better than what we have?  An acceptable linkage always
+   beats an unacceptable one;  between two acceptable ones the longer
+   baseline wins;  chi^2 breaks ties, and orders the candidates while none
+   is yet acceptable.                                             */
+
+static bool is_better( const KEPLERIAN_LINK_RESULT *result, const double chi2,
+                       const double baseline, const double chi2_max)
+{
+   const bool have = (result->epoch != 0.);
+   const bool ok = (chi2 < chi2_max);
+   const bool had_ok = (have && result->chi2 < chi2_max);
+
+   if( !have)
+      return( true);
+   if( ok != had_ok)
+      return( ok);
+   if( ok && baseline > result->baseline * 1.0001)
+      return( true);
+   if( ok && baseline < result->baseline * .9999)
+      return( false);
+   return( chi2 < result->chi2);
+}
 
 static void try_link3_window( KEPLERIAN_LINK_RESULT *result,
        const ATTRIBUTABLE *attr, const int *starts, const int *lengths,
-       const int a, const int b, const int c, const double rho_max)
+       const int a, const int b, const int c, const double rho_max,
+       const double chi2_max)
 {
    LINK3_ROOT roots[20];
    ATTRIBUTABLE chosen[3];
+   const double baseline = attr[c].t - attr[a].t;
    int i, n_roots;
 
    chosen[0] = attr[a];
@@ -1325,9 +1385,10 @@ static void try_link3_window( KEPLERIAN_LINK_RESULT *result,
       {
       const double chi2 = score_link3_root( roots + i, chosen);
 
-      if( chi2 >= 0. && (!result->epoch || chi2 < result->chi2))
+      if( chi2 >= 0. && is_better( result, chi2, baseline, chi2_max))
          {
          result->chi2 = chi2;
+         result->baseline = baseline;
          result->n_tracklets = 3;
          result->first_obs = starts[a];
          result->n_obs_used = starts[c] + lengths[c] - starts[a];
@@ -1339,10 +1400,11 @@ static void try_link3_window( KEPLERIAN_LINK_RESULT *result,
 
 static void try_link2_window( KEPLERIAN_LINK_RESULT *result,
        const ATTRIBUTABLE *attr, const int *starts, const int *lengths,
-       const int a, const int c, const double rho_max)
+       const int a, const int c, const double rho_max, const double chi2_max)
 {
    LINK2_ROOT roots[20];
    ATTRIBUTABLE chosen[2];
+   const double baseline = attr[c].t - attr[a].t;
    int i, n_roots;
 
    chosen[0] = attr[a];
@@ -1352,9 +1414,10 @@ static void try_link2_window( KEPLERIAN_LINK_RESULT *result,
       {
       const double chi2 = score_link2_root( roots + i, chosen);
 
-      if( chi2 >= 0. && (!result->epoch || chi2 < result->chi2))
+      if( chi2 >= 0. && is_better( result, chi2, baseline, chi2_max))
          {
          result->chi2 = chi2;
+         result->baseline = baseline;
          result->n_tracklets = 2;
          result->first_obs = starts[a];
          result->n_obs_used = starts[c] + lengths[c] - starts[a];
@@ -1367,7 +1430,7 @@ static void try_link2_window( KEPLERIAN_LINK_RESULT *result,
 int keplerian_link_orbit( KEPLERIAN_LINK_RESULT *result,
              const OBSERVE FAR *obs, const int n_obs,
              const double max_tracklet_gap, const double max_span,
-             const double rho_max)
+             const double rho_max, const double chi2_max)
 {
    int starts[MAX_KI_TRACKLETS], lengths[MAX_KI_TRACKLETS];
    int t_start[MAX_KI_TRACKLETS], t_len[MAX_KI_TRACKLETS];
@@ -1396,21 +1459,34 @@ int keplerian_link_orbit( KEPLERIAN_LINK_RESULT *result,
                      arc costs no more than a short one.       */
    for( i = 0; i < n_attr - 1 && n_windows < MAX_WINDOWS_TRIED; i++)
       {
-      const int step = (n_attr <= MAX_WINDOWS_TRIED ? 1
-                              : n_attr / MAX_WINDOWS_TRIED);
+      const int step = (n_attr <= MAX_ANCHORS ? 1 : n_attr / MAX_ANCHORS);
       const int a = (i * step < n_attr ? i * step : n_attr - 1);
-      int c = a;
+      int c_max = a, width;
 
-      while( c + 1 < n_attr && attr[c + 1].t - attr[a].t <= max_span)
-         c++;
-      if( c == a)             /* nothing else within the span */
-         continue;
-      n_windows++;
-      if( c - a >= 2)
-         try_link3_window( result, attr, t_start, t_len, a, (a + c) / 2, c,
-                                                            rho_max);
-      else
-         try_link2_window( result, attr, t_start, t_len, a, c, rho_max);
+      while( c_max + 1 < n_attr && attr[c_max + 1].t - attr[a].t <= max_span)
+         c_max++;
+                  /* Rather than always taking the widest baseline the span
+                     allows,  try a few widths and let the compatibility
+                     test choose.  There is no one right answer:  too short
+                     and there is no leverage,  too long and the two-body
+                     assumption these methods rest on starts to fail.  The
+                     best baseline depends on the object and on how its
+                     tracklets happen to fall,  so it is better measured
+                     than legislated.                          */
+      for( width = 0; width < 3 && n_windows < MAX_WINDOWS_TRIED; width++)
+         {
+         const int c = a + ((c_max - a) >> width);
+
+         if( c <= a)
+            break;
+         n_windows++;
+         if( c - a >= 2)
+            try_link3_window( result, attr, t_start, t_len, a,
+                                    (a + c) / 2, c, rho_max, chi2_max);
+         else
+            try_link2_window( result, attr, t_start, t_len, a, c,
+                                                   rho_max, chi2_max);
+         }
       if( i * step >= n_attr - 1)
          break;
       }
@@ -1423,7 +1499,8 @@ int keplerian_link_orbit( KEPLERIAN_LINK_RESULT *result,
       while( c + 1 < n_attr && attr[c + 1].t - attr[0].t <= max_span)
          c++;
       if( c)
-         try_link2_window( result, attr, t_start, t_len, 0, c, rho_max);
+         try_link2_window( result, attr, t_start, t_len, 0, c,
+                                                rho_max, chi2_max);
       }
    return( result->epoch ? 0 : -2);
 }
