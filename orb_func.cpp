@@ -35,6 +35,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 #include "monte0.h"
 #include "pl_cache.h"
 #include "constant.h"
+#include "keplerian_link.h"
 
 #ifndef _WIN32
    #include <unistd.h>
@@ -4236,6 +4237,7 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
    int i;
    int start = 0, n_radar_obs;
    bool dawn_based_observations = false;
+   bool got_keplerian_link = false;
    double arclen;
    char msg_buff[80];
    const double acceptable_score_limit = 5.;
@@ -4336,7 +4338,80 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
       free( sr);
       }
 
-   while( best_score > acceptable_score_limit)
+               /* Gronchi's Keplerian-integral linkage (keplerian_link.cpp)
+                  uses the conservation laws of the two-body problem rather
+                  than a Taylor expansion of the equations of motion,  so
+                  unlike Gauss,  Herget and Vaisala it does not care how
+                  far apart the tracklets are -- it will happily link
+                  apparitions separated by more than an orbital period.
+                  That makes it worth trying where the others have nothing
+                  to work with.  It is off unless KEPLERIAN_LINK is set;
+                  if it finds an acceptable orbit we take it and return,
+                  as the statistical ranging branch above does,  and
+                  otherwise fall through to the usual methods.       */
+   if( atoi( get_environment_ptr( "KEPLERIAN_LINK")))
+      {
+      const char *tptr = get_environment_ptr( "KEPLERIAN_LINK_GAP");
+      const char *sptr = get_environment_ptr( "KEPLERIAN_LINK_SPAN");
+      const char *rptr = get_environment_ptr( "KEPLERIAN_LINK_RHO_MAX");
+      const char *cptr = get_environment_ptr( "KEPLERIAN_LINK_MAX_CHI2");
+      const double max_gap = (*tptr ? atof( tptr) : .3);
+      const double max_span = (*sptr ? atof( sptr) : 1000.);
+      const double rho_max = (*rptr ? atof( rptr) : 60.);
+      const double max_chi2 = (*cptr ? atof( cptr) : 25.);
+      KEPLERIAN_LINK_RESULT ki;
+
+      if( keplerian_link_orbit( &ki, obs, n_obs, max_gap, max_span, rho_max))
+         {
+         if( debug_level)
+            debug_printf( "Keplerian link: no acceptable root\n");
+         }
+      else
+         {
+                  /* Score against the observations the linkage actually
+                     used,  as the Gauss and Vaisala branches below score
+                     against their sub-arc.  Judging a three-tracklet
+                     two-body orbit by its residuals across a twenty-five
+                     year arc would reject everything,  including orbits
+                     that are perfectly good seeds.            */
+         OBSERVE FAR *sub = obs + ki.first_obs;
+         const double epoch = sub[0].jd;
+         double score = 1e+10;
+
+         memcpy( orbit, ki.orbit, 6 * sizeof( double));
+         if( !integrate_orbit( orbit, ki.epoch, epoch)
+                    && !set_locs( orbit, epoch, sub, ki.n_obs_used))
+            score = evaluate_initial_orbit( sub, ki.n_obs_used, orbit, epoch);
+         if( debug_level)
+            debug_printf( "Keplerian link: %d tracklets, %d obs, chi2 %g,"
+                          " score %f\n", ki.n_tracklets, ki.n_obs_used,
+                          ki.chi2, score);
+                  /* Accept on the linkage's own compatibility chi^2 rather
+                     than on the residual score.  A two-body orbit fitted
+                     to three tracklets and then judged by its residuals
+                     across a thousand-day arc always looks terrible --
+                     score is in the thousands even when chi^2 says the
+                     identification is sound -- because it is being asked
+                     to do a job it was never meant to do.  Its job is to
+                     be a seed;  attempt_extensions() and the differential
+                     corrector take it from there.             */
+         if( ki.chi2 < max_chi2 && score < 1e+9)
+            {
+            got_keplerian_link = true;
+            start = ki.first_obs;
+            for( i = 0; i < n_obs; i++)
+               obs[i].is_included = (i >= ki.first_obs
+                            && i < ki.first_obs + ki.n_obs_used);
+            exclude_unusable_observations( obs, n_obs);
+            best_score = score;
+            memcpy( best_orbit, orbit, 6 * sizeof( double));
+            if( debug_level)
+               debug_printf( "Keplerian link accepted as the initial orbit\n");
+            }
+         }
+      }
+
+   while( !got_keplerian_link && best_score > acceptable_score_limit)
       {
       int end, n_subarc_obs, n_geocentric_obs = 0;
       const double max_arg_length_for_vaisala = 230.;

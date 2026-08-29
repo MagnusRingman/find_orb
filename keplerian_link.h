@@ -141,6 +141,44 @@ int link2_compatibility( double *chi2, double *delta, const ATTRIBUTABLE *a1,
                               const ATTRIBUTABLE *a2, const double *rho);
 int link3_compatibility( double *chi2, double *delta, const ATTRIBUTABLE *a0,
        const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2, const double *rho);
+
+/* Driving all of the above from a list of observations:  split them into
+   tracklets,  pick a well-separated triple,  run Link3 (or Link2 if only
+   two tracklets are available),  and keep the surviving orbit with the
+   smallest compatibility chi^2.
+
+   The separation is deliberately bounded.  These methods can link across
+   arbitrarily long gaps in principle,  but only because they assume pure
+   two-body motion,  and that assumption is what a long baseline destroys:
+   the node regresses,  the inclination oscillates,  and the conserved
+   quantities we are matching stop being conserved.  Gronchi's own test
+   cases span 921 and 564 days.  Handing this the first and last tracklets
+   of a twenty-five year arc produces a confidently wrong answer,  so we
+   cap the baseline and slide the window along the arc instead,  keeping
+   whichever placement gives the best chi^2.
+
+   'result->epoch' is the epoch of the returned state vector -- corrected
+   for light time,  so it is when the light left the object -- or zero if
+   no orbit was found.  'first_obs' and 'n_obs_used' report which
+   observations went into it,  so that the caller can score the orbit
+   against those rather than against an entire multi-apparition arc no
+   two-body orbit could ever fit.                                     */
+
+#define MAX_KI_TRACKLETS 1024
+
+typedef struct
+{
+   double epoch;              /* zero if nothing was found */
+   double orbit[6];           /* heliocentric,  AU and AU/day */
+   double chi2;               /* compatibility chi^2 of the chosen root */
+   int n_tracklets;           /* three for Link3,  two for Link2 */
+   int first_obs, n_obs_used; /* the observations actually used */
+} KEPLERIAN_LINK_RESULT;
+
+int keplerian_link_orbit( KEPLERIAN_LINK_RESULT *result,
+             const OBSERVE FAR *obs, const int n_obs,
+             const double max_tracklet_gap, const double max_span,
+             const double rho_max);
 int link2_setup( LINK2_DATA *ld, const ATTRIBUTABLE *a1,
                                  const ATTRIBUTABLE *a2);
 double link2_conic( const LINK2_DATA *ld, const double rho1, const double rho2);

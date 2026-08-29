@@ -1217,3 +1217,213 @@ int link3_compatibility( double *chi2, double *delta, const ATTRIBUTABLE *a0,
    attr[2] = *a2;
    return( compatibility( chi2, delta, attr, 3, rho));
 }
+
+/* Driving the above from a set of observations.
+
+   Everything up to this point works on attributables.  This turns a plain
+   list of observations into them,  runs whichever method the number of
+   tracklets allows,  and returns the best-scoring orbit as a state vector.
+
+   Note that nothing here calls into the rest of find_orb:  the whole file
+   links against the 'lunar' library alone,  which is what lets ki_test
+   check the mathematics without dragging in an ephemeris,  a config
+   directory or an integrator.  Configuration and reporting are therefore
+   the caller's business -- see initial_orbit() in orb_func.cpp.       */
+
+/* Split the observations into tracklets on gaps larger than
+   'max_tracklet_gap' days.  A tracklet is a handful of observations over
+   minutes to hours;  the next one is typically a night or longer away,
+   so almost any threshold between about an hour and a day gives the same
+   answer.                                                            */
+
+static int find_tracklets( const OBSERVE FAR *obs, const int n_obs,
+       int *starts, int *lengths, const int max_tracklets,
+       const double max_tracklet_gap)
+{
+   int i, n = 0;
+
+   if( !n_obs)
+      return( 0);
+   starts[0] = 0;
+   for( i = 1; i < n_obs && n < max_tracklets; i++)
+      if( obs[i].jd - obs[i - 1].jd > max_tracklet_gap)
+         {
+         lengths[n] = i - starts[n];
+         n++;
+         if( n < max_tracklets)
+            starts[n] = i;
+         }
+   if( n < max_tracklets)
+      {
+      lengths[n] = n_obs - starts[n];
+      n++;
+      }
+   return( n);
+}
+
+static int is_bound( const double *state)
+{
+   ELEMENTS elem;
+
+   return( !state_to_elements( &elem, state, J2000));
+}
+
+/* Score a candidate:  reject it outright if any range is non-positive,  if
+   any epoch gives an unbound orbit,  or if the angular momentum vanishes
+   (the straight-line solution),  and otherwise return the compatibility
+   chi^2.  Lower is better;  a negative return means 'rejected'.      */
+
+#define REJECTED (-1.)
+
+static double score_link3_root( const LINK3_ROOT *root, const ATTRIBUTABLE *attr)
+{
+   double chi2;
+   int k;
+
+   if( root->c_len < 1e-8)                /* straight-line solution */
+      return( REJECTED);
+   for( k = 0; k < 3; k++)
+      if( root->rho[k] <= 0. || !is_bound( root->state[k]))
+         return( REJECTED);
+   if( link3_compatibility( &chi2, NULL, attr, attr + 1, attr + 2, root->rho))
+      return( REJECTED);
+   return( chi2);
+}
+
+static double score_link2_root( const LINK2_ROOT *root, const ATTRIBUTABLE *attr)
+{
+   double chi2, rho[2];
+
+   if( root->rho1 <= 0. || root->rho2 <= 0.)
+      return( REJECTED);
+   if( !is_bound( root->state1) || !is_bound( root->state2))
+      return( REJECTED);
+   rho[0] = root->rho1;
+   rho[1] = root->rho2;
+   if( link2_compatibility( &chi2, NULL, attr, attr + 1, rho))
+      return( REJECTED);
+   return( chi2);
+}
+
+/* Try one triple of tracklets,  and keep it if it beats what we have. */
+
+#define MAX_WINDOWS_TRIED 16
+
+static void try_link3_window( KEPLERIAN_LINK_RESULT *result,
+       const ATTRIBUTABLE *attr, const int *starts, const int *lengths,
+       const int a, const int b, const int c, const double rho_max)
+{
+   LINK3_ROOT roots[20];
+   ATTRIBUTABLE chosen[3];
+   int i, n_roots;
+
+   chosen[0] = attr[a];
+   chosen[1] = attr[b];
+   chosen[2] = attr[c];
+   n_roots = link3( roots, 20, chosen, chosen + 1, chosen + 2, .05, rho_max);
+   for( i = 0; i < n_roots; i++)
+      {
+      const double chi2 = score_link3_root( roots + i, chosen);
+
+      if( chi2 >= 0. && (!result->epoch || chi2 < result->chi2))
+         {
+         result->chi2 = chi2;
+         result->n_tracklets = 3;
+         result->first_obs = starts[a];
+         result->n_obs_used = starts[c] + lengths[c] - starts[a];
+         memcpy( result->orbit, roots[i].state[0], 6 * sizeof( double));
+         result->epoch = chosen[0].t - roots[i].rho[0] / AU_PER_DAY;
+         }
+      }
+}
+
+static void try_link2_window( KEPLERIAN_LINK_RESULT *result,
+       const ATTRIBUTABLE *attr, const int *starts, const int *lengths,
+       const int a, const int c, const double rho_max)
+{
+   LINK2_ROOT roots[20];
+   ATTRIBUTABLE chosen[2];
+   int i, n_roots;
+
+   chosen[0] = attr[a];
+   chosen[1] = attr[c];
+   n_roots = link2( roots, 20, chosen, chosen + 1, .05, rho_max);
+   for( i = 0; i < n_roots; i++)
+      {
+      const double chi2 = score_link2_root( roots + i, chosen);
+
+      if( chi2 >= 0. && (!result->epoch || chi2 < result->chi2))
+         {
+         result->chi2 = chi2;
+         result->n_tracklets = 2;
+         result->first_obs = starts[a];
+         result->n_obs_used = starts[c] + lengths[c] - starts[a];
+         memcpy( result->orbit, roots[i].state1, 6 * sizeof( double));
+         result->epoch = chosen[0].t - roots[i].rho1 / AU_PER_DAY;
+         }
+      }
+}
+
+int keplerian_link_orbit( KEPLERIAN_LINK_RESULT *result,
+             const OBSERVE FAR *obs, const int n_obs,
+             const double max_tracklet_gap, const double max_span,
+             const double rho_max)
+{
+   int starts[MAX_KI_TRACKLETS], lengths[MAX_KI_TRACKLETS];
+   int t_start[MAX_KI_TRACKLETS], t_len[MAX_KI_TRACKLETS];
+   ATTRIBUTABLE attr[MAX_KI_TRACKLETS];
+   int n_tracklets, i, n_attr = 0, n_windows = 0;
+
+   memset( result, 0, sizeof( KEPLERIAN_LINK_RESULT));
+   n_tracklets = find_tracklets( obs, n_obs, starts, lengths,
+                                 MAX_KI_TRACKLETS, max_tracklet_gap);
+   for( i = 0; i < n_tracklets; i++)
+      if( lengths[i] >= 2)          /* need two obs to get a rate of motion */
+         if( !compute_attributable( attr + n_attr, obs + starts[i], lengths[i]))
+            {
+            t_start[n_attr] = starts[i];
+            t_len[n_attr] = lengths[i];
+            n_attr++;
+            }
+   if( n_attr < 2)
+      return( -1);
+                  /* Slide a window of at most 'max_span' days along the
+                     arc.  Within each placement we take the two ends and
+                     the middle:  adjacent tracklets would throw away the
+                     separation these methods exist to exploit,  while the
+                     whole arc would break the two-body assumption they
+                     rest on.  Anchors are spread evenly so that a long
+                     arc costs no more than a short one.       */
+   for( i = 0; i < n_attr - 1 && n_windows < MAX_WINDOWS_TRIED; i++)
+      {
+      const int step = (n_attr <= MAX_WINDOWS_TRIED ? 1
+                              : n_attr / MAX_WINDOWS_TRIED);
+      const int a = (i * step < n_attr ? i * step : n_attr - 1);
+      int c = a;
+
+      while( c + 1 < n_attr && attr[c + 1].t - attr[a].t <= max_span)
+         c++;
+      if( c == a)             /* nothing else within the span */
+         continue;
+      n_windows++;
+      if( c - a >= 2)
+         try_link3_window( result, attr, t_start, t_len, a, (a + c) / 2, c,
+                                                            rho_max);
+      else
+         try_link2_window( result, attr, t_start, t_len, a, c, rho_max);
+      if( i * step >= n_attr - 1)
+         break;
+      }
+                  /* If Link3 never produced anything acceptable,  fall
+                     back on Link2 over the widest admissible baseline. */
+   if( !result->epoch)
+      {
+      int c = 0;
+
+      while( c + 1 < n_attr && attr[c + 1].t - attr[0].t <= max_span)
+         c++;
+      if( c)
+         try_link2_window( result, attr, t_start, t_len, 0, c, rho_max);
+      }
+   return( result->epoch ? 0 : -2);
+}
