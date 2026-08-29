@@ -84,6 +84,46 @@ static const double laplace_attr[3][4] = {
    { 0.831367,  0.390747,  0.00622482,  0.00054073 } };
 static const double laplace_epoch[3] = { 55794.36935, 56226.53746, 56358.24760 };
 
+/* The individual observation epochs (MJD),  four per tracklet,  from the
+   paper's tables.  We need them only to get the spread in time,  which
+   fixes how well the rate of motion is determined and therefore the
+   covariance of the attributable.        */
+
+static const double mossotti_times[2][4] = {
+   { 55679.51169, 55679.52398, 55679.53664, 55679.54709 },
+   { 56600.43378, 56600.44773, 56600.46130, 56600.47489 } };
+
+static const double laplace_times[3][4] = {
+   { 55794.33902, 55794.35011, 55794.38807, 55794.40021 },
+   { 56226.52009, 56226.53117, 56226.54334, 56226.55525 },
+   { 56358.23971, 56358.24497, 56358.25023, 56358.25550 } };
+
+/* Pan-STARRS astrometry;  the paper does not quote uncertainties,  so we
+   assume a representative 0.3 arcseconds in each direction,  equally
+   weighted.  The absolute scale of chi^2 depends on this choice;  the
+   ranking of one solution against another does not.       */
+
+#define ASSUMED_SIGMA_ARCSEC .3
+
+static void set_covariance( ATTRIBUTABLE *attr, const double *times,
+                                                    const int n_times)
+{
+   const double sigma = ASSUMED_SIGMA_ARCSEC * PI / (180. * 3600.);
+   double t_mean = 0., sum_dt2 = 0.;
+   int i, j;
+
+   for( i = 0; i < n_times; i++)
+      t_mean += times[i];
+   t_mean /= (double)n_times;
+   for( i = 0; i < n_times; i++)
+      sum_dt2 += (times[i] - t_mean) * (times[i] - t_mean);
+   for( i = 0; i < 4; i++)
+      for( j = 0; j < 4; j++)
+         attr->covar[i][j] = 0.;
+   attr->covar[0][0] = attr->covar[1][1] = sigma * sigma / (double)n_times;
+   attr->covar[2][2] = attr->covar[3][3] = sigma * sigma / sum_dt2;
+}
+
 static void set_attributable( ATTRIBUTABLE *attr, const double *elems,
                             const double epoch, const double *observer)
 {
@@ -154,6 +194,8 @@ static int test_link2( const bool verbose)
                                             mossotti_observer[0]);
    set_attributable( &a2, mossotti_attr[1], mossotti_epoch[1],
                                             mossotti_observer[1]);
+   set_covariance( &a1, mossotti_times[0], 4);
+   set_covariance( &a2, mossotti_times[1], 4);
    n_roots = link2( roots, 20, &a1, &a2, .05, 60.);
    if( n_roots < 0)
       {
@@ -183,6 +225,39 @@ static int test_link2( const bool verbose)
                         This is what catches the rhodot1 / rhodot2
                         assignment being interchanged.      */
          rval += check( "|c1-c2|", roots[i].max_c_err, 0., 1e-12);
+            {
+            double chi2, delta[2], rho[2];
+
+            rho[0] = roots[i].rho1;
+            rho[1] = roots[i].rho2;
+            if( link2_compatibility( &chi2, delta, &a1, &a2, rho))
+               {
+               printf( "  FAILED: link2_compatibility() failed\n");
+               rval++;
+               }
+            else
+               {
+               printf( "  compatibility:  da = %+.5f au,  dl = %+.3f deg"
+                       "  ->  chi^2 = %.2f\n",
+                       delta[0], delta[1] * 180. / PI, chi2);
+                     /* The mean anomaly is exactly what the integrals do
+                        not constrain,  so dl is expected to be large --
+                        about ten degrees for the paper's own solution --
+                        while chi^2 stays modest.        */
+               if( fabs( delta[1] * 180. / PI) < 1.)
+                  {
+                  printf( "  FAILED: dl unexpectedly small;  check the"
+                          " mean anomaly comparison\n");
+                  rval++;
+                  }
+               if( chi2 > 100.)
+                  {
+                  printf( "  FAILED: chi^2 = %.2f for the accepted"
+                          " solution\n", chi2);
+                  rval++;
+                  }
+               }
+            }
          }
       }
    printf( "  paper:   1.8802     2.1774                  "
@@ -211,12 +286,15 @@ static int test_link3( const bool verbose)
    LINK3_ROOT roots[20];
    int i, k, n_roots, n_accepted = 0, rval = 0;
    int found[2] = { 0, 0 };
-   double sl[3];
+   double sl[3], chi2_for[2] = { -1., -1. };
 
    printf( "\nLink3,  (4628) Laplace,  three tracklets spanning 564 days:\n");
    for( k = 0; k < 3; k++)
+      {
       set_attributable( attr + k, laplace_attr[k], laplace_epoch[k],
                                                    laplace_observer[k]);
+      set_covariance( attr + k, laplace_times[k], 4);
+      }
    for( k = 0; k < 3; k++)
       sl[k] = straight_line_rho( attr + k);
    if( verbose)
@@ -253,9 +331,32 @@ static int test_link3( const bool verbose)
             rval += check( "straight-line rho", root->rho[k], sl[k], 1e-4);
       if( bound && positive && !straight_line)
          {
+         double chi2, delta[6];
+
          n_accepted++;
          printf( "        a = %.5f / %.5f / %.5f   e = %.5f / %.5f / %.5f\n",
                           a[0], a[1], a[2], ecc[0], ecc[1], ecc[2]);
+         const int err = link3_compatibility( &chi2, delta, attr, attr + 1,
+                                                    attr + 2, root->rho);
+
+         if( err)
+            {
+            printf( "        FAILED: link3_compatibility() returned %d\n", err);
+            rval++;
+            }
+         else
+            {
+            printf( "        compatibility:  d12 = (%+.4f au, %+.2f, %+.2f deg)"
+                    "  d32 = (%+.4f au, %+.2f, %+.2f deg)\n",
+                    delta[0], delta[1] * 180. / PI, delta[2] * 180. / PI,
+                    delta[3], delta[4] * 180. / PI, delta[5] * 180. / PI);
+            printf( "        chi^2 = %.4g\n", chi2);
+            for( k = 0; k < 2; k++)
+               if( fabs( root->rho[0] - laplace_expected[k][0]) < .005
+                && fabs( root->rho[1] - laplace_expected[k][1]) < .005
+                && fabs( root->rho[2] - laplace_expected[k][2]) < .005)
+                  chi2_for[k] = chi2;
+            }
          for( k = 0; k < 2; k++)
             if( fabs( root->rho[0] - laplace_expected[k][0]) < .005
              && fabs( root->rho[1] - laplace_expected[k][1]) < .005
@@ -279,6 +380,28 @@ static int test_link3( const bool verbose)
          printf( "  FAILED: did not recover the paper's solution %d\n", k + 1);
          rval++;
          }
+                  /* The whole point of the test:  solution 2 has
+                     consistent elements from epoch to epoch and solution 1
+                     does not,  so the compatibility test must prefer the
+                     second by a wide margin.  The absolute scale of chi^2
+                     depends on the assumed astrometric sigma;  the
+                     ordering does not.               */
+   if( chi2_for[0] > 0. && chi2_for[1] > 0.)
+      {
+      printf( "\n  chi^2:  solution 1 (drifting elements) = %.4g,"
+              "  solution 2 (consistent) = %.4g\n", chi2_for[0], chi2_for[1]);
+      if( chi2_for[1] >= chi2_for[0])
+         {
+         printf( "  FAILED: the compatibility test does not prefer"
+                 " solution 2\n");
+         rval++;
+         }
+      }
+   else
+      {
+      printf( "  FAILED: chi^2 not obtained for both solutions\n");
+      rval++;
+      }
    return( rval);
 }
 

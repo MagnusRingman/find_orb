@@ -74,6 +74,35 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
    makes the elimination possible.                                    */
 
 #define J2000 2451545.
+#define PI 3.1415926535897932384626433832795028841971693993751058209749445923
+#define GAUSS_K .01720209895
+#define SOLAR_GM (GAUSS_K * GAUSS_K)
+      /* AU_PER_DAY -- the speed of light in AU/day -- comes from afuncs.h */
+
+/* Step used when differencing the map from attributables to Delta,  as a
+   fraction of the standard deviation of the component being varied.  A
+   full sigma of the rate is a large perturbation -- for a half-hour
+   tracklet it is most of a percent of the proper motion -- and Link3 is
+   stiff enough that the root then moves onto another branch:  on the
+   paper's (4628) Laplace case,  steps of a fifth of a sigma or more do
+   not reconverge at the first attempt,  and rely on the step-shrinking
+   fallback below.
+
+   Measured on that case,  the chi^2 of the _good_ solution is 0.0155,
+   holding to within a few tenths of a percent for steps between a
+   two-hundredth and a thirtieth of a sigma,  and to about three percent
+   out to a tenth.  The chi^2 of the bad solution is not stable at all:  it
+   wanders over 179 to 1676 across the same range of steps,  because with
+   Delta some eighty degrees from zero the map is nowhere near linear over
+   a perturbation of this size.  That does not matter for the purpose --
+   the two stay at least four orders of magnitude apart however the step is
+   chosen -- but it does mean the absolute chi^2 of a clearly rejected
+   solution must not be read as a probability.  Only the chi^2 of a
+   solution that nearly passes is quantitatively meaningful.        */
+
+#ifndef FD_STEP_IN_SIGMAS
+   #define FD_STEP_IN_SIGMAS .03
+#endif
 
 /* Least-squares fit of a straight line to each component of the observed
    unit vectors,  giving the line of sight and its rate at the mean epoch.
@@ -85,7 +114,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 int compute_attributable( ATTRIBUTABLE *attr, const OBSERVE FAR *obs,
                                                         const int n_obs)
 {
+   const double arcsec = PI / (180. * 3600.);
    double t_mean = 0., sum_dt2 = 0., dot;
+   double sigma_east = 0., sigma_north = 0.;
    int i, j;
 
    if( n_obs < 2)
@@ -127,6 +158,34 @@ int compute_attributable( ATTRIBUTABLE *attr, const OBSERVE FAR *obs,
    dot = dot_product( attr->u, attr->eta);
    for( j = 0; j < 3; j++)      /* enforce eta perpendicular to u */
       attr->eta[j] -= dot * attr->u[j];
+                  /* Uncertainty of the fit.  Because the epochs are taken
+                     relative to their mean,  the intercept and the slope
+                     are uncorrelated,  and the covariance is diagonal:
+                     sigma^2 / n for the line of sight and sigma^2 / sum
+                     dt^2 for its rate.  We take a representative sigma per
+                     direction,  which is exact when the observations are
+                     equally weighted -- the usual case within one
+                     tracklet.  posn_sigma_1 is taken as the east (RA)
+                     uncertainty and posn_sigma_2 as the north (dec) one,
+                     as elsewhere in find_orb;  either being unset falls
+                     back to one arcsecond.               */
+   for( i = 0; i < n_obs; i++)
+      {
+      const double s1 = (obs[i].posn_sigma_1 > 0. ? obs[i].posn_sigma_1 : 1.);
+      const double s2 = (obs[i].posn_sigma_2 > 0. ? obs[i].posn_sigma_2 : 1.);
+
+      sigma_east += s1 * s1;
+      sigma_north += s2 * s2;
+      }
+   sigma_east = sqrt( sigma_east / (double)n_obs) * arcsec;
+   sigma_north = sqrt( sigma_north / (double)n_obs) * arcsec;
+   for( i = 0; i < 4; i++)
+      for( j = 0; j < 4; j++)
+         attr->covar[i][j] = 0.;
+   attr->covar[0][0] = sigma_east * sigma_east / (double)n_obs;
+   attr->covar[1][1] = sigma_north * sigma_north / (double)n_obs;
+   attr->covar[2][2] = sigma_east * sigma_east / sum_dt2;
+   attr->covar[3][3] = sigma_north * sigma_north / sum_dt2;
    return( 0);
 }
 
@@ -766,4 +825,395 @@ int link3( LINK3_ROOT *roots, const int max_roots, const ATTRIBUTABLE *a0,
             }
          }
    return( n_roots);
+}
+
+/* The compatibility test.
+
+   Conservation laws cannot pin down every element.  Link2 imposes angular
+   momentum,  energy and the Laplace-Lenz vector,  which leaves only the
+   semimajor axis and the mean anomaly free;  Link3 imposes angular
+   momentum alone,  which additionally leaves the argument of perihelion
+   free.  If the tracklets really do belong to one object those leftover
+   differences must vanish,  so they make a natural test of the
+   identification.
+
+   The catch is that they are not small in absolute terms.  The mean
+   anomaly is exactly what the integrals fail to constrain,  and in the
+   paper's own accepted Link2 solution the two epochs disagree by about
+   ten degrees in it.  So a raw threshold is useless;  what matters is the
+   size of the discrepancy relative to its own uncertainty.  We therefore
+   propagate the attributable covariances through to Delta and use the
+   resulting quadratic form.                                        */
+
+void attributable_basis( const ATTRIBUTABLE *attr, double *east, double *north)
+{
+   const double pole[3] = { 0., 0., 1. };
+   const double xaxis[3] = { 1., 0., 0. };
+   double len;
+   int i;
+
+   vector_cross_product( east, pole, attr->u);
+   len = vector3_length( east);
+   if( len < 1e-8)         /* looking along the pole;  any basis will do */
+      {
+      vector_cross_product( east, xaxis, attr->u);
+      len = vector3_length( east);
+      }
+   for( i = 0; i < 3; i++)
+      east[i] /= len;
+   vector_cross_product( north, attr->u, east);
+}
+
+static void perturb_attributable( ATTRIBUTABLE *out, const ATTRIBUTABLE *in,
+                                                     const double *delta)
+{
+   double east[3], north[3], dot;
+   int i;
+
+   *out = *in;
+   attributable_basis( in, east, north);
+   for( i = 0; i < 3; i++)
+      {
+      out->u[i]   += delta[0] * east[i] + delta[1] * north[i];
+      out->eta[i] += delta[2] * east[i] + delta[3] * north[i];
+      }
+   normalize_vect3( out->u);
+   dot = dot_product( out->u, out->eta);
+   for( i = 0; i < 3; i++)
+      out->eta[i] -= dot * out->u[i];
+}
+
+/* Solve the n x n system a x = b in place by Gauss-Jordan elimination with
+   partial pivoting.  n is at most six here.  Returns nonzero if singular. */
+
+static int solve_linear( double *a, double *b, const int n)
+{
+   int i, j, k;
+
+   for( i = 0; i < n; i++)
+      {
+      int best = i;
+      double pivot;
+
+      for( j = i + 1; j < n; j++)
+         if( fabs( a[j * n + i]) > fabs( a[best * n + i]))
+            best = j;
+      if( best != i)
+         {
+         double temp;
+
+         for( j = 0; j < n; j++)
+            {
+            temp = a[i * n + j];
+            a[i * n + j] = a[best * n + j];
+            a[best * n + j] = temp;
+            }
+         temp = b[i];
+         b[i] = b[best];
+         b[best] = temp;
+         }
+      pivot = a[i * n + i];
+      if( pivot == 0.)
+         return( -1);
+      for( j = 0; j < n; j++)
+         a[i * n + j] /= pivot;
+      b[i] /= pivot;
+      for( k = 0; k < n; k++)
+         if( k != i)
+            {
+            const double factor = a[k * n + i];
+
+            for( j = 0; j < n; j++)
+               a[k * n + j] -= factor * a[i * n + j];
+            b[k] -= factor * b[i];
+            }
+      }
+   return( 0);
+}
+
+static double wrap_angle( double angle)
+{
+   angle = fmod( angle, PI + PI);
+   if( angle > PI)
+      angle -= PI + PI;
+   if( angle < -PI)
+      angle += PI + PI;
+   return( angle);
+}
+
+static int state_to_elements( ELEMENTS *elem, const double *state,
+                                              const double epoch)
+{
+   elem->gm = SOLAR_GM;
+   elem->epoch = epoch;
+   elem->central_obj = 0;
+   calc_classical_elements( elem, state, epoch, 1);
+   if( elem->ecc >= 1. || elem->major_axis <= 0.)
+      return( -1);            /* unbound;  no mean anomaly to compare */
+   return( 0);
+}
+
+/* Newton refinement of the ranges,  used to follow a root as the
+   attributables are perturbed.  For Link2 the two constraints are the
+   conic and xi . u1;  for Link3 they are the three conics.  The radial
+   velocities are not unknowns here -- they were eliminated analytically --
+   so the systems are 2 x 2 and 3 x 3 rather than the 4 x 4 and 6 x 6 of
+   the paper.                                                       */
+
+static int link_residuals( double *resid, const ATTRIBUTABLE *attr,
+                              const int n_attr, const double *rho)
+{
+   if( n_attr == 2)
+      {
+      LINK2_DATA ld;
+
+      if( link2_setup( &ld, attr, attr + 1))
+         return( -1);
+      resid[0] = link2_conic( &ld, rho[0], rho[1]);
+      resid[1] = link2_p( &ld, rho[0], rho[1], 0);
+      }
+   else
+      {
+      LINK3_DATA ld;
+      int k;
+
+      if( link3_setup( &ld, attr, attr + 1, attr + 2))
+         return( -1);
+      for( k = 0; k < 3; k++)
+         resid[k] = link3_conic( &ld, k, rho[k], rho[(k + 1) % 3]);
+      }
+   return( 0);
+}
+
+static int refine_ranges( const ATTRIBUTABLE *attr, const int n_attr,
+                                                    double *rho)
+{
+   const int n = n_attr;      /* one constraint per unknown range */
+   int iter;
+
+   for( iter = 0; iter < 50; iter++)
+      {
+      double f[3], jac[9], step[3], worst = 0., scale;
+      int i, j;
+
+      if( link_residuals( f, attr, n_attr, rho))
+         return( -1);
+      for( j = 0; j < n; j++)
+         {
+         const double h = fabs( rho[j]) * 1e-6 + 1e-10;
+         double saved = rho[j], fp[3], fm[3];
+
+         rho[j] = saved + h;
+         if( link_residuals( fp, attr, n_attr, rho))
+            return( -1);
+         rho[j] = saved - h;
+         if( link_residuals( fm, attr, n_attr, rho))
+            return( -1);
+         rho[j] = saved;
+         for( i = 0; i < n; i++)
+            jac[i * n + j] = (fp[i] - fm[i]) / (2. * h);
+         }
+      for( i = 0; i < n; i++)
+         step[i] = -f[i];
+      if( solve_linear( jac, step, n))
+         return( -2);
+                  /* Damp the step.  Link3 in particular is stiff enough
+                     that an undamped Newton step can overshoot into
+                     negative ranges,  or onto a different branch of a
+                     conic.  Limit each range to a half of its current
+                     value per iteration,  and never let one go
+                     non-positive.                        */
+      scale = 1.;
+      for( i = 0; i < n; i++)
+         if( fabs( step[i]) > .5 * rho[i])
+            {
+            const double limit = .5 * rho[i] / fabs( step[i]);
+
+            if( scale > limit)
+               scale = limit;
+            }
+      for( i = 0; i < n; i++)
+         {
+         const double applied = scale * step[i];
+
+         rho[i] += applied;
+         if( worst < fabs( applied))
+            worst = fabs( applied);
+         if( rho[i] <= 0.)
+            return( -3);
+         }
+      if( worst < 1e-13)
+         return( 0);
+      }
+   return( -4);         /* failed to converge */
+}
+
+/* The leftover element differences.  Link2 compares the two epochs;  Link3
+   compares epochs 1 and 3 against epoch 2,  which is Gronchi's choice of
+   reference.                                            */
+
+static int compute_delta( double *delta, const ATTRIBUTABLE *attr,
+                              const int n_attr, const double *rho)
+{
+   ELEMENTS elem[3];
+   double t[3], n_ref;
+   int k;
+
+   if( n_attr == 2)
+      {
+      LINK2_DATA ld;
+      double state[2][6];
+
+      if( link2_setup( &ld, attr, attr + 1))
+         return( -1);
+      link2_states( &ld, rho[0], rho[1], state[0], state[1]);
+      for( k = 0; k < 2; k++)
+         {
+         t[k] = attr[k].t - rho[k] / AU_PER_DAY;   /* light-time corrected */
+         if( state_to_elements( elem + k, state[k], t[k]))
+            return( -1);
+         }
+      n_ref = GAUSS_K / (elem[1].major_axis * sqrt( elem[1].major_axis));
+      delta[0] = elem[0].major_axis - elem[1].major_axis;
+      delta[1] = wrap_angle( elem[0].mean_anomaly - elem[1].mean_anomaly
+                                          - n_ref * (t[0] - t[1]));
+      }
+   else
+      {
+      LINK3_DATA ld;
+      double states[18];
+      int out = 0;
+
+      if( link3_setup( &ld, attr, attr + 1, attr + 2))
+         return( -1);
+      link3_states( &ld, rho, states);
+      for( k = 0; k < 3; k++)
+         {
+         t[k] = attr[k].t - rho[k] / AU_PER_DAY;
+         if( state_to_elements( elem + k, states + k * 6, t[k]))
+            return( -1);
+         }
+      n_ref = GAUSS_K / (elem[1].major_axis * sqrt( elem[1].major_axis));
+      for( k = 0; k < 3; k += 2)       /* epochs 0 and 2,  against 1 */
+         {
+         delta[out++] = elem[k].major_axis - elem[1].major_axis;
+         delta[out++] = wrap_angle( elem[k].arg_per - elem[1].arg_per);
+         delta[out++] = wrap_angle( elem[k].mean_anomaly - elem[1].mean_anomaly
+                                             - n_ref * (t[k] - t[1]));
+         }
+      }
+   return( 0);
+}
+
+/* Propagate the attributable covariances onto Delta and form the quadratic
+   form.  The Jacobian is taken by central differences of the whole map
+   from attributables to Delta,  re-converging the ranges at each perturbed
+   point;  that is the total derivative,  including the implicit dependence
+   of the ranges on the data,  without having to assemble the partials of
+   the constraint system by hand.  Steps are one standard deviation of the
+   component being varied,  which keeps them well clear of rounding while
+   staying in the linear regime.                                     */
+
+static int compatibility( double *chi2, double *delta_out,
+              const ATTRIBUTABLE *attr, const int n_attr, const double *rho)
+{
+   const int n_delta = (n_attr == 2 ? 2 : 6);
+   const int n_params = 4 * n_attr;
+   double delta0[6], jac[6 * 12], gamma[36], rhs[6];
+   double rho0[3];
+   int i, j, k, b;
+
+   memcpy( rho0, rho, n_attr * sizeof( double));
+   if( compute_delta( delta0, attr, n_attr, rho0))
+      return( -1);
+   if( delta_out)
+      memcpy( delta_out, delta0, n_delta * sizeof( double));
+   for( j = 0; j < n_params; j++)
+      {
+      const int which = j / 4, comp = j % 4;
+      const double sigma = sqrt( attr[which].covar[comp][comp]);
+      ATTRIBUTABLE perturbed[3];
+      double offset[4], dplus[6], dminus[6], trial[3];
+      double h = FD_STEP_IN_SIGMAS * sigma;
+      int sign, attempt, converged = 0;
+
+      for( i = 0; i < n_delta; i++)
+         jac[i * n_params + j] = 0.;
+      if( sigma <= 0.)           /* no uncertainty quoted;  no sensitivity */
+         continue;
+                  /* If a perturbed system will not reconverge -- the root
+                     having moved onto another branch -- shrink the step
+                     and try again rather than giving up on the whole
+                     test.                                         */
+      for( attempt = 0; attempt < 6 && !converged; attempt++, h *= .25)
+         {
+         converged = 1;
+         for( sign = -1; sign <= 1 && converged; sign += 2)
+            {
+            for( k = 0; k < 4; k++)
+               offset[k] = (k == comp ? sign * h : 0.);
+            for( k = 0; k < n_attr; k++)
+               if( k == which)
+                  perturb_attributable( perturbed + k, attr + k, offset);
+               else
+                  perturbed[k] = attr[k];
+            memcpy( trial, rho0, n_attr * sizeof( double));
+            if( refine_ranges( perturbed, n_attr, trial)
+                     || compute_delta( sign > 0 ? dplus : dminus, perturbed,
+                                                          n_attr, trial))
+               converged = 0;
+            }
+         if( converged)
+            for( i = 0; i < n_delta; i++)
+               jac[i * n_params + j] = (dplus[i] - dminus[i]) / (2. * h);
+         }
+      if( !converged)
+         return( -2);
+      }
+                  /* Gamma_Delta = J Gamma_A J^T,  with Gamma_A block
+                     diagonal:  one 4 x 4 block per attributable.    */
+   for( i = 0; i < n_delta * n_delta; i++)
+      gamma[i] = 0.;
+   for( b = 0; b < n_attr; b++)
+      for( i = 0; i < n_delta; i++)
+         for( j = 0; j < n_delta; j++)
+            {
+            double sum = 0.;
+            int m, n;
+
+            for( m = 0; m < 4; m++)
+               for( n = 0; n < 4; n++)
+                  sum += jac[i * n_params + b * 4 + m]
+                       * attr[b].covar[m][n]
+                       * jac[j * n_params + b * 4 + n];
+            gamma[i * n_delta + j] += sum;
+            }
+   memcpy( rhs, delta0, n_delta * sizeof( double));
+   if( solve_linear( gamma, rhs, n_delta))
+      return( -3);
+   *chi2 = 0.;
+   for( i = 0; i < n_delta; i++)
+      *chi2 += delta0[i] * rhs[i];
+   return( 0);
+}
+
+int link2_compatibility( double *chi2, double *delta, const ATTRIBUTABLE *a1,
+                              const ATTRIBUTABLE *a2, const double *rho)
+{
+   ATTRIBUTABLE attr[2];
+
+   attr[0] = *a1;
+   attr[1] = *a2;
+   return( compatibility( chi2, delta, attr, 2, rho));
+}
+
+int link3_compatibility( double *chi2, double *delta, const ATTRIBUTABLE *a0,
+       const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2, const double *rho)
+{
+   ATTRIBUTABLE attr[3];
+
+   attr[0] = *a0;
+   attr[1] = *a1;
+   attr[2] = *a2;
+   return( compatibility( chi2, delta, attr, 3, rho));
 }

@@ -35,7 +35,20 @@ typedef struct
    double eta[3];          /* du/dt,  radians/day;  perpendicular to u */
    double q[3];            /* heliocentric observer position,  AU */
    double qdot[3];         /* heliocentric observer velocity,  AU/day */
+   double covar[4][4];     /* uncertainty of (u, eta);  see below */
 } ATTRIBUTABLE;
+
+/* 'covar' is the covariance of the attributable in the local orthonormal
+   basis (east, north) perpendicular to the line of sight,  ordered
+
+      (du.east, du.north, deta.east, deta.north)
+
+   in radians and radians/day.  Those are the same four quantities as
+   Gronchi's (alpha cos delta, delta, alphadot cos delta, deltadot),  but
+   defined without reference to a pole.  attributable_basis() returns the
+   two basis vectors.                                              */
+
+void attributable_basis( const ATTRIBUTABLE *attr, double *east, double *north);
 
 /* Everything that depends only on the pair of attributables,  so that
    evaluating the constraint polynomials at a trial (rho1, rho2) is
@@ -102,6 +115,32 @@ double straight_line_rho( const ATTRIBUTABLE *attr);
 int link3( LINK3_ROOT *roots, const int max_roots, const ATTRIBUTABLE *a0,
         const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2,
         const double rho_min, const double rho_max);
+
+/* The compatibility test that selects among the solutions.  The Keplerian
+   integrals leave some elements unconstrained:  Link2 matches everything
+   except the semimajor axis and the mean anomaly,  Link3 (using angular
+   momentum alone) leaves the semimajor axis,  argument of perihelion and
+   mean anomaly free.  If the attributables really do belong to one object,
+   those leftover differences must vanish.  We form them into a vector
+   Delta -- two components for Link2,  six for Link3 -- propagate the
+   attributable covariances onto it,  and return
+
+      chi2 = Delta . Gamma_Delta^-1 . Delta
+
+   Gronchi's control is chi2 <= chi_max^2,  with chi_max chosen from
+   simulation.  Note that Delta is not small in absolute terms:  the mean
+   anomaly is precisely what the integrals do not constrain,  so a
+   perfectly good solution can be tens of degrees out and still pass.  The
+   covariance is doing all the work.
+
+   'delta' receives the raw Delta vector (radians and AU) if not NULL.
+   Returns 0 on success,  nonzero if the elements or the covariance could
+   not be formed (an unbound solution,  say,  or a singular Gamma).   */
+
+int link2_compatibility( double *chi2, double *delta, const ATTRIBUTABLE *a1,
+                              const ATTRIBUTABLE *a2, const double *rho);
+int link3_compatibility( double *chi2, double *delta, const ATTRIBUTABLE *a0,
+       const ATTRIBUTABLE *a1, const ATTRIBUTABLE *a2, const double *rho);
 int link2_setup( LINK2_DATA *ld, const ATTRIBUTABLE *a1,
                                  const ATTRIBUTABLE *a2);
 double link2_conic( const LINK2_DATA *ld, const double rho1, const double rho2);
