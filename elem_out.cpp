@@ -926,7 +926,7 @@ static int elements_in_json_format( FILE *ofile, const ELEMENTS *elem,
    double jd_first, jd_last;
    double q_sigma = 0., weighted_rms;
    char buff[180];
-   int first, last, i, n_used;
+   int first, last, i, n_used, n_outside_arc;
    extern const char *combine_all_observations;
    const char *packed_id;
    extern double uncertainty_parameter;
@@ -1091,6 +1091,14 @@ static int elements_in_json_format( FILE *ofile, const ELEMENTS *elem,
       n_used += (obs[i].is_included & 1);
    fprintf( ofile, "\n        \"count\": %u,", n_obs);
    fprintf( ofile, "\n        \"used\": %u,", n_used);
+            /* Of the unused observations,  distinguish those that lay */
+            /* outside the fitted arc from those rejected as outliers  */
+            /* within it;  the former may simply never have been       */
+            /* reached,  and may be worth a second attempt.            */
+   for( i = n_outside_arc = 0; i < (int)n_obs; i++)
+      if( obs[i].flags & OBS_OUTSIDE_ARC)
+         n_outside_arc++;
+   fprintf( ofile, "\n        \"outside_arc\": %u,", n_outside_arc);
 
    jd_first = utc_from_td( obs[0].jd, NULL);
    jd_last  = utc_from_td( obs[n_obs - 1].jd, NULL);

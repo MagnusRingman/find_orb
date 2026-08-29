@@ -191,6 +191,13 @@ typedef uint64_t ephem_option_t;
    /* e.g.,  that a particular observation has been processed        */
 #define OBS_TEMP_USE_FLAG                        0x40
 
+   /* Following marks an observation that lies outside the fitted arc, */
+   /* as opposed to one that was rejected as an outlier within it.     */
+   /* Both have is_included = 0,  but they mean different things :  an */
+   /* observation outside the arc may simply never have been reached,  */
+   /* and may be worth a second attempt.                               */
+#define OBS_OUTSIDE_ARC                          0x80
+
 extern int object_type;
 
       /* The above should be one of these three values.  Natural */
