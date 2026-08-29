@@ -4611,18 +4611,75 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
       conventional_arc = (first >= 0 ? obs[last].jd - obs[first].jd : 0.);
       if( ki.baseline > conventional_arc * 1.5)
          {
-         memcpy( orbit, ki_orbit, 6 * sizeof( double));
-         start = ki.first_obs;
+                  /* Try the rescue,  but keep enough to undo it.  A longer
+                     arc is only worth having if it actually fits:  a linkage
+                     that joins two apparitions which do not belong together
+                     recovers the arc just as well as a correct one,  and
+                     looks like a win on that measure alone while being
+                     flatly wrong.  Measured over 330 objects,  adopting on
+                     arc length alone gained 29 objects and got 19 of them
+                     wrong -- a = 36.4 where the reference says 10.4,  and
+                     so on.  So we check the resulting fit and put the old
+                     orbit back if it does not hold up.        */
+         const char *mptr = get_environment_ptr( "KEPLERIAN_LINK_MAX_RMS");
+         const double max_rms = (*mptr ? atof( mptr) : 2.);
+         double saved_orbit[6];
+         const int saved_start = start;
+         char *saved_included = (char *)malloc( (size_t)n_obs);
+         double conv_rms, ki_rms;
+         int j;
+
+         memcpy( saved_orbit, orbit, 6 * sizeof( double));
          for( i = 0; i < n_obs; i++)
-            obs[i].is_included = (i >= ki.first_obs
-                         && i < ki.first_obs + ki.n_obs_used);
+            saved_included[i] = (char)obs[i].is_included;
+         set_locs( orbit, orbit_epoch, obs, n_obs);
+         conv_rms = compute_weighted_rms( obs, n_obs, NULL);
+
+                  /* Include only the tracklets the linkage actually used,
+                     not everything lying between them.  Marking the whole
+                     span asks the corrector to go from a rough two-body
+                     seed to a fit over years and hundreds of observations
+                     in one step,  and it does not get there:  the rescued
+                     fits came back with five to eight observations used and
+                     rms in the thousands,  which is an unconverged fit
+                     reporting its own starting guess.  Fitting the linked
+                     tracklets first is a well-determined problem -- six
+                     parameters against a dozen or two observations -- and
+                     attempt_extensions() then grows the arc from a solution
+                     rather than from a guess.                    */
+         memcpy( orbit, ki_orbit, 6 * sizeof( double));
+         start = ki.trk_start[0];
+         for( i = 0; i < n_obs; i++)
+            obs[i].is_included = 0;
+         for( j = 0; j < ki.n_tracklets; j++)
+            for( i = ki.trk_start[j]; i < ki.trk_start[j] + ki.trk_len[j]; i++)
+               if( i >= 0 && i < n_obs)
+                  obs[i].is_included = 1;
          exclude_unusable_observations( obs, n_obs);
          orbit_epoch = obs[start].jd;
          attempt_extensions( obs, n_obs, orbit, orbit_epoch);
-         if( debug_level)
-            debug_printf( "Keplerian link adopted: baseline %.0f d against"
-                          " %.0f d after extension\n",
-                          ki.baseline, conventional_arc);
+         set_locs( orbit, orbit_epoch, obs, n_obs);
+         ki_rms = compute_weighted_rms( obs, n_obs, NULL);
+         if( ki_rms < max_rms)
+            {
+            if( debug_level)
+               debug_printf( "Keplerian link adopted: baseline %.0f d against"
+                             " %.0f d,  rms %.3f against %.3f\n",
+                             ki.baseline, conventional_arc, ki_rms, conv_rms);
+            }
+         else
+            {              /* the longer arc does not fit;  put it back */
+            memcpy( orbit, saved_orbit, 6 * sizeof( double));
+            start = saved_start;
+            for( i = 0; i < n_obs; i++)
+               obs[i].is_included = saved_included[i];
+            orbit_epoch = obs[start].jd;
+            set_locs( orbit, orbit_epoch, obs, n_obs);
+            if( debug_level)
+               debug_printf( "Keplerian link rejected: rms %.3f against"
+                             " %.3f from the shorter arc\n", ki_rms, conv_rms);
+            }
+         free( saved_included);
          }
       else if( debug_level)
          debug_printf( "Keplerian link not needed: baseline %.0f d against"

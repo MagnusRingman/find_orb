@@ -1392,6 +1392,9 @@ static void try_link3_window( KEPLERIAN_LINK_RESULT *result,
          result->n_tracklets = 3;
          result->first_obs = starts[a];
          result->n_obs_used = starts[c] + lengths[c] - starts[a];
+         result->trk_start[0] = starts[a];   result->trk_len[0] = lengths[a];
+         result->trk_start[1] = starts[b];   result->trk_len[1] = lengths[b];
+         result->trk_start[2] = starts[c];   result->trk_len[2] = lengths[c];
          memcpy( result->orbit, roots[i].state[0], 6 * sizeof( double));
          result->epoch = chosen[0].t - roots[i].rho[0] / AU_PER_DAY;
          }
@@ -1421,6 +1424,9 @@ static void try_link2_window( KEPLERIAN_LINK_RESULT *result,
          result->n_tracklets = 2;
          result->first_obs = starts[a];
          result->n_obs_used = starts[c] + lengths[c] - starts[a];
+         result->trk_start[0] = starts[a];   result->trk_len[0] = lengths[a];
+         result->trk_start[1] = starts[c];   result->trk_len[1] = lengths[c];
+         result->trk_start[2] = 0;           result->trk_len[2] = 0;
          memcpy( result->orbit, roots[i].state1, 6 * sizeof( double));
          result->epoch = chosen[0].t - roots[i].rho1 / AU_PER_DAY;
          }

@@ -173,7 +173,8 @@ typedef struct
    double chi2;               /* compatibility chi^2 of the chosen root */
    double baseline;           /* days between the first and last tracklet */
    int n_tracklets;           /* three for Link3,  two for Link2 */
-   int first_obs, n_obs_used; /* the observations actually used */
+   int first_obs, n_obs_used; /* the span from the first to the last */
+   int trk_start[3], trk_len[3];   /* the linked tracklets themselves */
 } KEPLERIAN_LINK_RESULT;
 
 /* 'chi2_max' is the threshold below which a linkage counts as acceptable.
