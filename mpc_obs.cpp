@@ -2949,6 +2949,7 @@ and should be marked as OBS_DONT_USE and excluded. */
 static void exclude_unusable_duplicate_obs( OBSERVE *obs, int n_obs)
 {
    int i;
+   const bool combining = (combine_all_observations != NULL);
 
    while( n_obs)
       {
@@ -2956,9 +2957,14 @@ static void exclude_unusable_duplicate_obs( OBSERVE *obs, int n_obs)
       const double tolerance = 2. * (PI / 180.) / 3600.;    /* two arcsec */
       int j;
 
+               /* If we're combining observations of different objects  */
+               /* into one,  two observations at the same time from the */
+               /* same site,  but with different designations,  aren't  */
+               /* duplicate reports;  they're two objects in one frame. */
       i = 1;
       while( i < n_obs && times_very_close( obs, obs + i)
-                        && !strcmp( obs[i].mpc_code, obs->mpc_code))
+                        && !strcmp( obs[i].mpc_code, obs->mpc_code)
+                        && (!combining || !strcmp( obs[i].packed_id, obs->packed_id)))
          {
          const double d_ra = centralize_ang( obs[i].ra - obs->ra);
          const double d_dec = centralize_ang( obs[i].dec - obs->dec);
@@ -2976,7 +2982,7 @@ static void exclude_unusable_duplicate_obs( OBSERVE *obs, int n_obs)
       if( max_ra - min_ra > tolerance || max_dec - min_dec > tolerance)
          for( j = 0; j < i; j++)
             {
-            obs[j].flags |= OBS_DONT_USE;
+            obs[j].flags |= OBS_DONT_USE | OBS_MISMATCHED_DUP;
             obs[j].is_included = 0;
             }
       obs += i;
@@ -4076,14 +4082,14 @@ OBSERVE FAR *load_observations( FILE *ifile, const char *packed_desig,
                                      && nighttime_only( rval[i].mpc_code))
                   {
                   rval[i].is_included = 0;
-                  rval[i].flags |= OBS_DONT_USE;
+                  rval[i].flags |= OBS_DONT_USE | OBS_DAYLIT;
                   n_in_sunlight++;
                   comment_observation( rval + i, "Daylit");
                   }
                if( obj_alt_az.y < _overall_obj_alt_limit)
                   {
                   rval[i].is_included = 0;
-                  rval[i].flags |= OBS_DONT_USE;
+                  rval[i].flags |= OBS_DONT_USE | OBS_BELOW_HORIZON;
                   n_below_horizon++;
                   comment_observation( rval + i, "Horizon");
                   }
@@ -4096,8 +4102,13 @@ OBSERVE FAR *load_observations( FILE *ifile, const char *packed_desig,
          snprintf_err( buff, sizeof( buff), get_find_orb_text( 2012),
                         n_below_horizon);
       if( n_in_sunlight)
-         snprintf_err( buff, sizeof( buff), get_find_orb_text( 2013),
+         {
+         if( *buff)
+            strlcat_error( buff, " ");
+         snprintf_append( buff, sizeof( buff), get_find_orb_text( 2013),
                         n_in_sunlight);
+         }
+      strlcat_error( buff, " ");
       strlcat_error( buff, get_find_orb_text( 2014));
       debug_printf( "%s:\n", rval->packed_id);
       generic_message_box( buff, "!");
@@ -4677,6 +4688,10 @@ static size_t get_environment_ptr_index( const char *env_ptr, bool *got_it)
          *got_it = true;
          i = mid;
          }
+               /* The '=' ends the stored key.  If we hit it before the end */
+               /* of the key we're looking for,  the stored key is a prefix */
+               /* of ours (SETTINGS vs SETTINGS2,  say) and sorts before it, */
+               /* no matter what our next character is.                    */
       else if( edata[mid][j] == '=' || edata[mid][j] < env_ptr[j])
          {
          n -= n / 2 + 1;

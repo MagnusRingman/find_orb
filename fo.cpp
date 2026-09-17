@@ -188,8 +188,6 @@ static int unlink_config_file( const char *filename)
       strlcat_error( cpath, buff);
 
       err_code = UNLINK( cpath);
-      if( err_code)
-         fprintf( stderr, "Failed unlinking '%s' ('%s')\n", filename, buff);
       }
    else
       {
@@ -197,9 +195,9 @@ static int unlink_config_file( const char *filename)
 
       make_config_dir_name( cpath, buff);
       err_code = UNLINK( cpath);
-      if( err_code)
-         fprintf( stderr, "Failed unlinking '%s'\n", cpath);
       }
+   if( err_code && errno == ENOENT)    /* never made;  nothing to clean up */
+      err_code = 0;
    if( err_code)
       fprintf( stderr, "Failed unlinking '%s' ('%s')\n", filename, buff);
    return( err_code);
@@ -808,13 +806,13 @@ int main( int argc, const char **argv)
                return( -1);
             }
          }
-               /* get_defaults( ) collects a lot of data that's for the  */
-               /* interactive find_orb program.  But it also sets some   */
-               /* important internal values for blunder detection,  etc. */
-               /* So we still call it:                                   */
-   get_defaults( &ephemeris_output_options,
-                         NULL, &element_precision, NULL, NULL);
-
+               /* KEY=VALUE arguments override settings from environ.dat  */
+               /* (or from a file given with -D).  Some of those settings  */
+               /* are read in get_defaults( ),  so they have to be applied */
+               /* before it's called.  The get_environment_ptr( ) call    */
+               /* just makes sure environ.dat has been loaded first,  so   */
+               /* that the arguments override it rather than vice versa.   */
+   get_environment_ptr( "");
    for( i = 1; i < argc; i++)
       {
       const char *tptr = strchr( argv[i], '=');
@@ -828,6 +826,13 @@ int main( int argc, const char **argv)
          set_environment_ptr( tbuff, argv[i] + len + 1);
          }
       }
+
+               /* get_defaults( ) collects a lot of data that's for the  */
+               /* interactive find_orb program.  But it also sets some   */
+               /* important internal values for blunder detection,  etc. */
+               /* So we still call it:                                   */
+   get_defaults( &ephemeris_output_options,
+                         NULL, &element_precision, NULL, NULL);
 
    forced_central_body = override_forced_central_body;
    if( ephem_option_string)
@@ -885,7 +890,8 @@ int main( int argc, const char **argv)
          break;       /* break out of loop,  signalling we're a parent */
       process_count++;
       }
-   process_count++;
+   if( n_processes > 1)
+      process_count++;
    if( show_processing_steps)
       printf( "Process count %d\n", process_count);
 #endif

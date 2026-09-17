@@ -129,6 +129,7 @@ char **load_file_into_memory( const char *filename, size_t *n_lines,
 int set_language( const int language);                      /* elem_out.cpp */
 void get_find_orb_text_filename( char *filename);     /* elem_out.cpp */
 FILE *fopen_ext( const char *filename, const char *permits);   /* miscell.cpp */
+int unlink_ext( const char *filename);                         /* miscell.cpp */
 static int names_compare( const char *name1, const char *name2);
 static int get_uncertainty( const char *key, char *obuff, const bool in_km);
 static int obj_desig_to_perturber( const char *packed_desig);
@@ -1996,6 +1997,16 @@ int write_out_elements_to_file( const double *orbit,
                   epoch_shown, perturbers, planet_orbiting))
          available_sigmas = 0;
       }
+   if( available_sigmas != COVARIANCE_AVAILABLE)
+      {
+      char tname[100];
+
+               /* Any covariance files still lying around are for some  */
+               /* other orbit (an attempted step that was backed out,    */
+               /* say).  Remove them rather than leave them to mislead.  */
+      unlink_ext( get_file_name( tname, "covar.txt"));
+      unlink_ext( get_file_name( tname, "covar.json"));
+      }
    if( !(options & ELEM_OUT_ALTERNATIVE_FORMAT))
       showing_sigmas = 0;
    else
@@ -3090,11 +3101,13 @@ static double extract_state_vect_from_text( const char *text,
       tbuff[i] = '\0';
       epoch = get_time_from_string( 0., tbuff, CALENDAR_JULIAN_GREGORIAN, NULL);
       }
-   assert( epoch);
+   if( !epoch)          /* no epoch,  or an unparseable one : */
+      return( 0.);      /* return zero to signal failure     */
    text += i + 1;
    for( i = 0; i < 6 && sscanf( text, "%lf%n", orbit + i, &bytes_read) == 1; i++)
       text += bytes_read + 1;
-   assert( i == 6 || i == 0);
+   if( i != 6 && i != 0)      /* partial state vector */
+      return( 0.);
    is_state_vector = (i == 6);
    memset( &elem, 0, sizeof( ELEMENTS));
    *abs_mag = 18.;
@@ -3187,6 +3200,8 @@ static double extract_state_vect_from_text( const char *text,
       }
    if( !is_state_vector)
       {
+      if( !(quantities_found & (FOUND_A | FOUND_Q)))
+         return( 0.);      /* no distance given;  can't make an orbit of it */
       elem.epoch = epoch;
       if( !(quantities_found & FOUND_TPERIH))
          elem.perih_time = elem.epoch;
@@ -3357,6 +3372,13 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
             }
          abs_mag = elems.abs_mag;
          }
+      else if( n_obs == 1 && !strcmp( obs->reference, "Dummy"))
+         {           /* We were asked to use stored elements for an object */
+         fprintf( stderr,      /* and there aren't any;  there's no point  */
+                  "ERROR: no orbital elements found for '%s' in 'mpcorb.sof'\n",
+                  object_name); /* in computing an orbit from one dummy obs */
+         exit( -1);
+         }
       }
    if( !got_vectors)
       {
@@ -3403,15 +3425,21 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
       for( pass = 0; pass < 2; pass++)
          {
          const int64_t t0 = nanoseconds_since_1970( );
-         const int64_t QUARTER_SECOND = 250000000;
+         const char *timeout = get_environment_ptr( "IMPROVE_TIMEOUT");
+         const int64_t time_limit = (int64_t)( 1e+9 *
+                     (*timeout ? atof( timeout) : .25));  /* default 1/4 sec */
+         int max_steps = atoi( get_environment_ptr( "MAX_IMPROVE_STEPS"));
          const double mid_epoch = mid_epoch_of_arc( obs, n_obs);
 
+         if( !max_steps)
+            max_steps = 4;
          push_orbit( *orbit_epoch, orbit);
          integrate_orbit( orbit, *orbit_epoch, mid_epoch);
          *orbit_epoch = mid_epoch;
          if( !pass)
             prev_score = evaluate_initial_orbit( obs, n_obs, orbit, *orbit_epoch);
-         for( i = 0; i < 4 && (nanoseconds_since_1970( ) - t0) < QUARTER_SECOND; i++)
+         for( i = 0; i < max_steps && (time_limit <= 0
+                        || nanoseconds_since_1970( ) - t0 < time_limit); i++)
             {
             if( i)
                filter_obs( obs, n_obs, automatic_outlier_rejection_limit, 0);
@@ -3445,11 +3473,23 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
    else if( skip_full_improvement )
       {
       extern double override_abs_mag;
+      extern unsigned always_included_perturbers;
 
+               /* With no fit,  nothing turns perturbers on for us.  Use  */
+               /* the full planetary set,  as we do for a stored solution */
+               /* (an orbit handed to us was almost certainly computed    */
+               /* with perturbations,  and would be badly off without.)   */
+               /* If PERTURBERS was set explicitly,  though,  take that   */
+               /* as the model to use :  it lets one reproduce exactly    */
+               /* the model the orbit was fitted with.                    */
+      perturbers = (always_included_perturbers ? always_included_perturbers : 0x7fe);
       set_locs( orbit, *orbit_epoch, obs, n_obs);
-      override_abs_mag = abs_mag;
+               /* If an H was supplied with the orbit,  use it in    */
+               /* computing magnitudes,  rather than deriving one    */
+               /* from whatever magnitudes the observations may have */
+      if( state_vect_text && strstr( state_vect_text, "H="))
+         override_abs_mag = abs_mag;
       calc_absolute_magnitude( obs, n_obs);
-      override_abs_mag = 0.;
       }
                /* if a stored solution failed (i.e.,  didn't get sigmas), */
                /* we try again,  ignoring the stored solution.            */

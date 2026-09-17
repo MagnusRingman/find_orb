@@ -64,7 +64,9 @@ CONFIG_IS_LOCAL for such cases.        */
 
 #if defined( _WIN32) || defined( __WATCOMC__)
    #include <direct.h>        /* for _mkdir() definition */
+   #include <io.h>            /* for _unlink() definition */
    #define CONFIG_IS_LOCAL
+   #define unlink _unlink
 #else
    #include <sys/stat.h>
    #include <sys/types.h>
@@ -347,6 +349,31 @@ FILE *fopen_ext( const char *filename, const char *permits)
       generic_message_box( buff, "o");
       exit( -1);
       }
+   return( rval);
+}
+
+/* Removes a file made with fopen_ext( ),  looking for it in the same
+places fopen_ext( ) would have put it.  Returns 0 if a file was removed. */
+
+int unlink_ext( const char *filename)
+{
+   char tname[255];
+   int rval = -1;
+
+   get_temp_dir( tname, sizeof( tname));
+   if( *tname)
+      {
+      snprintf_append( tname, sizeof( tname), "/%s",  filename);
+      rval = unlink( tname);
+      }
+   if( rval && alt_config_directory && *alt_config_directory)
+      {
+      strcpy( tname, alt_config_directory);
+      strcat( tname, filename);
+      rval = unlink( tname);
+      }
+   if( rval)
+      rval = unlink( default_config_dir_name( tname, filename));
    return( rval);
 }
 

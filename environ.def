@@ -133,8 +133,14 @@ JPL_FILENAME=
    When Find_Orb loads up a short arc,  it uses "statistical ranging"
    (SR),  and defaults to trying 100 possible orbits at a mix of
    distances and radial velocities to characterize the possible orbits
-   for the object.  You can raise or lower that number here.
+   for the object.  You can raise or lower that number here.  The search
+   also stops after SR_TIMEOUT seconds of CPU time (defaults to half a
+   second),  which means the number of orbits actually tried can depend on
+   how fast (and how busy) the machine is.  Set SR_TIMEOUT=0 to remove the
+   time limit,  so that MAX_SR_ORBITS alone decides,  and the result is
+   the same from one run (or machine) to the next.
 MAX_SR_ORBITS=100
+SR_TIMEOUT=0.5
 
    By default,  if asteroid perturbers are turned on,  Pallas is included
    if it is within 10 AU of our target object.  This 'asteroid threshhold'
@@ -281,12 +287,29 @@ SEED_RESTART_MIN_ARC=20
    default) multiplies by one and leaves the ranking exactly as it was.
 SUBARC_COUNT_WEIGHT=0
 
+   Once an initial orbit is found,  or a stored or supplied orbit is
+   loaded (the -v option in 'fo',  say),  it's polished with up to
+   MAX_IMPROVE_STEPS steps of differential correction (defaults to four).
+   We also stop early if that's taken more than IMPROVE_TIMEOUT seconds
+   (defaults to a quarter second).  The time limit keeps 'fo' moving
+   when processing thousands of objects,  but it does mean that how well
+   an orbit converges can depend on how busy the machine is,  especially
+   on long arcs where each step is slow.  Set IMPROVE_TIMEOUT=0 to remove
+   the time limit and always run the full number of steps;  results are
+   then reproducible from run to run,  at some cost in speed.  (See also
+   SR_TIMEOUT above,  the other place where a clock decides how much work
+   gets done.)
+MAX_IMPROVE_STEPS=4
+IMPROVE_TIMEOUT=0.25
+
    Initial orbit determination (IOD) usually takes a couple of seconds.
    For longer arcs,  it might take five or ten seconds.  If it takes more
    than IOD_TIMEOUT seconds (defaults to 20),  we stop looking for a better
    initial orbit and take whatever our best orbit thus far is.  (Such cases
    usually come about because the observations are inconsistent and there
-   isn't really a meaningful orbit that fits them.)
+   isn't really a meaningful orbit that fits them.)  Set it to zero for no
+   time limit at all.  Note that this is CPU time,  so it's not affected
+   much by how busy the machine is,  but it isn't entirely immune either.
 IOD_TIMEOUT=20
 
    Find_Orb defaults to looking for the BC405 ephemeris file (orbital elements
@@ -357,12 +380,32 @@ RA_DEC_FORMAT=3,2
    By default,  Find_Orb does a decent job of figuring out which objects
    should be included as perturbers.  But if you want to insist that all
    computations include certain objects,  you can use the line below to
-   do so.  It's a hexadecimal number that is the sum of 2=Mercury,  4=Venus,
-   8=Earth, ... 100 = Neptune, 200=Pluto, 400=the Moon.  The sun is always
-   included.  So 7fe,  for example,  would be (nine) planets plus the moon.
-   408 would add just the earth and moon.  Note that if Find_Orb detects
-   that an orbit would pass close to,  say,  Neptune,  then it will be
-   turned on automatically.
+   do so.  It's a hexadecimal number that is the sum of
+
+         2 = Mercury          800 = Io
+         4 = Venus           1000 = Europa
+         8 = Earth           2000 = Ganymede
+        10 = Mars            4000 = Callisto
+        20 = Jupiter         8000 = Tethys
+        40 = Saturn         10000 = Dione
+        80 = Uranus         20000 = Rhea
+       100 = Neptune        40000 = Titan
+       200 = Pluto          80000 = Iapetus
+       400 = the Moon      100000 = asteroids (see below)
+
+   The sun is always included.  So 7fe,  for example,  would be (nine)
+   planets plus the moon.  408 would add just the earth and moon.  Note
+   that if Find_Orb detects that an orbit would pass close to,  say,
+   Neptune,  then it will be turned on automatically.
+
+   Note that 7ff is _not_ "everything";  the asteroid perturbers (the BC405
+   set;  see BC405_FILENAME below) are bit 100000,  so all planets plus the
+   moon plus asteroids is 1007fe.  That's roughly what MPC and JPL use,  and
+   what you'd want to reproduce their orbits or residuals closely.  Also
+   note that the mask used in _fitting_ an orbit depends on the arc length
+   (Find_Orb adds planets as the arc grows),  and is written to the
+   '# Perturbers:' line of 'elements.txt'.  Orbits propagated with a
+   different mask than they were fitted with can be off by a lot.
 PERTURBERS=0
 
    In console Find_Orb,  one can have every (say) fifth observation

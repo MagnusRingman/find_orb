@@ -1726,7 +1726,7 @@ int get_sr_orbits( sr_orbit_t *orbits, OBSERVE FAR *obs,
    sr_orbit_t *tptr = orbits;
 
    INTENTIONALLY_UNUSED_PARAMETER( noise_in_sigmas);
-   for( i = 0; i < max_orbits && clock( ) < end_clock; i++)
+   for( i = 0; i < max_orbits && (max_time <= 0. || clock( ) < end_clock); i++)
       {
       if( !find_nth_sr_orbit( tptr, obs, n_obs, i + starting_orbit)
                    && (n_obs == 2 || !adjust_herget_results( obs, n_obs, tptr->orbit)))
@@ -2892,7 +2892,8 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
       debug_printf( "Hit planet %d in full_improvement : %d\n",
                       planet_hit, set_locs_rval);
       runtime_message = NULL;
-      return( -4);
+      set_locs( orbit, epoch, obs, n_obs);   /* restore residuals zeroed above; */
+      return( -4);            /* otherwise a failed fit looks like a perfect one */
       }
 
    planet_orbiting = find_central_object( obs, epoch2, orbit2, tvect);
@@ -3157,6 +3158,7 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
       free( slopes);
       free( orig_obs);
       memcpy( orbit, original_orbit, n_orbit_params * sizeof( double));
+      set_locs( orbit, epoch, obs, n_obs);   /* restore residuals,  too */
       return( -1);
       }
 
@@ -3262,6 +3264,18 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
             i = 0;
          }
          while( !err_code && i);
+      if( err_code)
+         {        /* The step took us to an orbit we can't integrate (one */
+                  /* that hits the sun,  say).  Go back to the orbit we    */
+                  /* started with,  and restore its residuals :  we reset  */
+                  /* them to zero above,  and if we left it that way,  a   */
+                  /* failed fit would look like a perfect one.             */
+         memcpy( orbit, original_orbit, n_orbit_params * sizeof( double));
+         if( !loop && setting_outside_of_arc)
+            set_locs( orbit, epoch, obs - n_skipped_obs, n_total_obs);
+         else
+            set_locs( orbit, epoch, obs, n_obs);
+         }
       if( loop && !err_code)
          lsquare_free( lsquare);
       }
@@ -3305,7 +3319,8 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
                }
             fprintf( ofile, "\n");
             }
-      fprintf( json_ofile, "{ ");
+      fprintf( json_ofile, "{ \"packed\": \"%s\",\n", obs->packed_id);
+      fprintf( json_ofile, "  \"frame\": \"heliocentric ecliptic J2000; au, au/day\",\n  ");
       output_json_matrix( json_ofile, "covar", matrix, n_params);
       fprintf( json_ofile, ", \"state_vect\": [\n");
       for( i = 0; i < 6; i++)
@@ -4241,6 +4256,8 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
    double best_score = 1e+50;
    double best_orbit[6], orbit_epoch;
    const int max_time = atoi( get_environment_ptr( "IOD_TIMEOUT"));
+   const char *sr_timeout = get_environment_ptr( "SR_TIMEOUT");
+   const double max_sr_time = (*sr_timeout ? atof( sr_timeout) : .5);
 
    for( i = 0; i < 6; i++)
       best_orbit[i] = 0.;
@@ -4298,7 +4315,7 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
       sr_orbit_t *sr = (sr_orbit_t *)calloc( max_n_sr_orbits,
                                        sizeof( sr_orbit_t));
 
-      n_sr_orbits = get_sr_orbits( sr, obs, n_obs, 0, max_n_sr_orbits, .5, 0., 0);
+      n_sr_orbits = get_sr_orbits( sr, obs, n_obs, 0, max_n_sr_orbits, max_sr_time, 0., 0);
       i = 0;
       while( (unsigned)i < n_sr_orbits && sr[i].score < .7)
          i++;
@@ -4306,7 +4323,7 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
       while( n_sr_orbits > 3 && n_sr_orbits <= 10)
          {
          unsigned n = get_sr_orbits( sr + n_sr_orbits, obs, n_obs,
-                           rand( ), max_n_sr_orbits - n_sr_orbits, .5, 0., 0);
+                           rand( ), max_n_sr_orbits - n_sr_orbits, max_sr_time, 0., 0);
 
          i = 0;
          while( (unsigned)i < n_sr_orbits + n && sr[i].score < .7)
