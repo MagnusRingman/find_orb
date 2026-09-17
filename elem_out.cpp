@@ -129,6 +129,7 @@ char **load_file_into_memory( const char *filename, size_t *n_lines,
 int set_language( const int language);                      /* elem_out.cpp */
 void get_find_orb_text_filename( char *filename);     /* elem_out.cpp */
 FILE *fopen_ext( const char *filename, const char *permits);   /* miscell.cpp */
+int unlink_ext( const char *filename);                         /* miscell.cpp */
 static int names_compare( const char *name1, const char *name2);
 static int get_uncertainty( const char *key, char *obuff, const bool in_km);
 static int obj_desig_to_perturber( const char *packed_desig);
@@ -1995,6 +1996,16 @@ int write_out_elements_to_file( const double *orbit,
       if( available_sigmas_hash != compute_available_sigmas_hash( obs, n_obs,
                   epoch_shown, perturbers, planet_orbiting))
          available_sigmas = 0;
+      }
+   if( available_sigmas != COVARIANCE_AVAILABLE)
+      {
+      char tname[100];
+
+               /* Any covariance files still lying around are for some  */
+               /* other orbit (an attempted step that was backed out,    */
+               /* say).  Remove them rather than leave them to mislead.  */
+      unlink_ext( get_file_name( tname, "covar.txt"));
+      unlink_ext( get_file_name( tname, "covar.json"));
       }
    if( !(options & ELEM_OUT_ALTERNATIVE_FORMAT))
       showing_sigmas = 0;

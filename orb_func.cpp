@@ -3320,7 +3320,8 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
                }
             fprintf( ofile, "\n");
             }
-      fprintf( json_ofile, "{ ");
+      fprintf( json_ofile, "{ \"packed\": \"%s\",\n", obs->packed_id);
+      fprintf( json_ofile, "  \"frame\": \"heliocentric ecliptic J2000; au, au/day\",\n  ");
       output_json_matrix( json_ofile, "covar", matrix, n_params);
       fprintf( json_ofile, ", \"state_vect\": [\n");
       for( i = 0; i < 6; i++)
