@@ -188,8 +188,6 @@ static int unlink_config_file( const char *filename)
       strlcat_error( cpath, buff);
 
       err_code = UNLINK( cpath);
-      if( err_code)
-         fprintf( stderr, "Failed unlinking '%s' ('%s')\n", filename, buff);
       }
    else
       {
@@ -197,9 +195,9 @@ static int unlink_config_file( const char *filename)
 
       make_config_dir_name( cpath, buff);
       err_code = UNLINK( cpath);
-      if( err_code)
-         fprintf( stderr, "Failed unlinking '%s'\n", cpath);
       }
+   if( err_code && errno == ENOENT)    /* never made;  nothing to clean up */
+      err_code = 0;
    if( err_code)
       fprintf( stderr, "Failed unlinking '%s' ('%s')\n", filename, buff);
    return( err_code);
