@@ -806,13 +806,13 @@ int main( int argc, const char **argv)
                return( -1);
             }
          }
-               /* get_defaults( ) collects a lot of data that's for the  */
-               /* interactive find_orb program.  But it also sets some   */
-               /* important internal values for blunder detection,  etc. */
-               /* So we still call it:                                   */
-   get_defaults( &ephemeris_output_options,
-                         NULL, &element_precision, NULL, NULL);
-
+               /* KEY=VALUE arguments override settings from environ.dat  */
+               /* (or from a file given with -D).  Some of those settings  */
+               /* are read in get_defaults( ),  so they have to be applied */
+               /* before it's called.  The get_environment_ptr( ) call    */
+               /* just makes sure environ.dat has been loaded first,  so   */
+               /* that the arguments override it rather than vice versa.   */
+   get_environment_ptr( "");
    for( i = 1; i < argc; i++)
       {
       const char *tptr = strchr( argv[i], '=');
@@ -826,6 +826,13 @@ int main( int argc, const char **argv)
          set_environment_ptr( tbuff, argv[i] + len + 1);
          }
       }
+
+               /* get_defaults( ) collects a lot of data that's for the  */
+               /* interactive find_orb program.  But it also sets some   */
+               /* important internal values for blunder detection,  etc. */
+               /* So we still call it:                                   */
+   get_defaults( &ephemeris_output_options,
+                         NULL, &element_precision, NULL, NULL);
 
    forced_central_body = override_forced_central_body;
    if( ephem_option_string)
