@@ -198,6 +198,14 @@ typedef uint64_t ephem_option_t;
    /* and may be worth a second attempt.                               */
 #define OBS_OUTSIDE_ARC                          0x80
 
+   /* These say _why_ an observation got OBS_DONT_USE when loaded :  it */
+   /* was taken in daylight,  or with the object below the horizon,  or */
+   /* it's one of two or more observations at the same time from the   */
+   /* same site that don't agree with each other.                       */
+#define OBS_DAYLIT                              0x100
+#define OBS_BELOW_HORIZON                       0x200
+#define OBS_MISMATCHED_DUP                      0x400
+
 extern int object_type;
 
       /* The above should be one of these three values.  Natural */
