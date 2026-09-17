@@ -3361,6 +3361,13 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
             }
          abs_mag = elems.abs_mag;
          }
+      else if( n_obs == 1 && !strcmp( obs->reference, "Dummy"))
+         {           /* We were asked to use stored elements for an object */
+         fprintf( stderr,      /* and there aren't any;  there's no point  */
+                  "ERROR: no orbital elements found for '%s' in 'mpcorb.sof'\n",
+                  object_name); /* in computing an orbit from one dummy obs */
+         exit( -1);
+         }
       }
    if( !got_vectors)
       {
