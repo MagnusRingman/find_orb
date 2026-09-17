@@ -4678,7 +4678,12 @@ static size_t get_environment_ptr_index( const char *env_ptr, bool *got_it)
          *got_it = true;
          i = mid;
          }
-      else if( j == len || (j < len && edata[mid][j] > env_ptr[j]))
+               /* The '=' ends the stored key.  If we hit it before the end */
+               /* of the key we're looking for,  the stored key is a prefix */
+               /* of ours (SETTINGS vs SETTINGS2,  say) and sorts before it, */
+               /* no matter what our next character is.                    */
+      else if( j == len || (j < len && edata[mid][j] != '='
+                                    && edata[mid][j] > env_ptr[j]))
          n /= 2;
       else
          {
