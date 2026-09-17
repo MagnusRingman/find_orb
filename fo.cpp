@@ -885,7 +885,8 @@ int main( int argc, const char **argv)
          break;       /* break out of loop,  signalling we're a parent */
       process_count++;
       }
-   process_count++;
+   if( n_processes > 1)
+      process_count++;
    if( show_processing_steps)
       printf( "Process count %d\n", process_count);
 #endif
