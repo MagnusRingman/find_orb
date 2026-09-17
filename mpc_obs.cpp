@@ -2949,6 +2949,7 @@ and should be marked as OBS_DONT_USE and excluded. */
 static void exclude_unusable_duplicate_obs( OBSERVE *obs, int n_obs)
 {
    int i;
+   const bool combining = (combine_all_observations != NULL);
 
    while( n_obs)
       {
@@ -2956,9 +2957,14 @@ static void exclude_unusable_duplicate_obs( OBSERVE *obs, int n_obs)
       const double tolerance = 2. * (PI / 180.) / 3600.;    /* two arcsec */
       int j;
 
+               /* If we're combining observations of different objects  */
+               /* into one,  two observations at the same time from the */
+               /* same site,  but with different designations,  aren't  */
+               /* duplicate reports;  they're two objects in one frame. */
       i = 1;
       while( i < n_obs && times_very_close( obs, obs + i)
-                        && !strcmp( obs[i].mpc_code, obs->mpc_code))
+                        && !strcmp( obs[i].mpc_code, obs->mpc_code)
+                        && (!combining || !strcmp( obs[i].packed_id, obs->packed_id)))
          {
          const double d_ra = centralize_ang( obs[i].ra - obs->ra);
          const double d_dec = centralize_ang( obs[i].dec - obs->dec);
