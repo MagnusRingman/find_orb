@@ -133,8 +133,14 @@ JPL_FILENAME=
    When Find_Orb loads up a short arc,  it uses "statistical ranging"
    (SR),  and defaults to trying 100 possible orbits at a mix of
    distances and radial velocities to characterize the possible orbits
-   for the object.  You can raise or lower that number here.
+   for the object.  You can raise or lower that number here.  The search
+   also stops after SR_TIMEOUT seconds of CPU time (defaults to half a
+   second),  which means the number of orbits actually tried can depend on
+   how fast (and how busy) the machine is.  Set SR_TIMEOUT=0 to remove the
+   time limit,  so that MAX_SR_ORBITS alone decides,  and the result is
+   the same from one run (or machine) to the next.
 MAX_SR_ORBITS=100
+SR_TIMEOUT=0.5
 
    By default,  if asteroid perturbers are turned on,  Pallas is included
    if it is within 10 AU of our target object.  This 'asteroid threshhold'
@@ -275,12 +281,29 @@ SEED_RESTART_MIN_ARC=20
    default) multiplies by one and leaves the ranking exactly as it was.
 SUBARC_COUNT_WEIGHT=0
 
+   Once an initial orbit is found,  or a stored or supplied orbit is
+   loaded (the -v option in 'fo',  say),  it's polished with up to
+   MAX_IMPROVE_STEPS steps of differential correction (defaults to four).
+   We also stop early if that's taken more than IMPROVE_TIMEOUT seconds
+   (defaults to a quarter second).  The time limit keeps 'fo' moving
+   when processing thousands of objects,  but it does mean that how well
+   an orbit converges can depend on how busy the machine is,  especially
+   on long arcs where each step is slow.  Set IMPROVE_TIMEOUT=0 to remove
+   the time limit and always run the full number of steps;  results are
+   then reproducible from run to run,  at some cost in speed.  (See also
+   SR_TIMEOUT above,  the other place where a clock decides how much work
+   gets done.)
+MAX_IMPROVE_STEPS=4
+IMPROVE_TIMEOUT=0.25
+
    Initial orbit determination (IOD) usually takes a couple of seconds.
    For longer arcs,  it might take five or ten seconds.  If it takes more
    than IOD_TIMEOUT seconds (defaults to 20),  we stop looking for a better
    initial orbit and take whatever our best orbit thus far is.  (Such cases
    usually come about because the observations are inconsistent and there
-   isn't really a meaningful orbit that fits them.)
+   isn't really a meaningful orbit that fits them.)  Set it to zero for no
+   time limit at all.  Note that this is CPU time,  so it's not affected
+   much by how busy the machine is,  but it isn't entirely immune either.
 IOD_TIMEOUT=20
 
    Find_Orb defaults to looking for the BC405 ephemeris file (orbital elements

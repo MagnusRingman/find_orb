@@ -1727,7 +1727,7 @@ int get_sr_orbits( sr_orbit_t *orbits, OBSERVE FAR *obs,
    sr_orbit_t *tptr = orbits;
 
    INTENTIONALLY_UNUSED_PARAMETER( noise_in_sigmas);
-   for( i = 0; i < max_orbits && clock( ) < end_clock; i++)
+   for( i = 0; i < max_orbits && (max_time <= 0. || clock( ) < end_clock); i++)
       {
       if( !find_nth_sr_orbit( tptr, obs, n_obs, i + starting_orbit)
                    && (n_obs == 2 || !adjust_herget_results( obs, n_obs, tptr->orbit)))
@@ -4256,6 +4256,8 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
    double best_score = 1e+50;
    double best_orbit[6], orbit_epoch;
    const int max_time = atoi( get_environment_ptr( "IOD_TIMEOUT"));
+   const char *sr_timeout = get_environment_ptr( "SR_TIMEOUT");
+   const double max_sr_time = (*sr_timeout ? atof( sr_timeout) : .5);
 
    for( i = 0; i < 6; i++)
       best_orbit[i] = 0.;
@@ -4313,7 +4315,7 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
       sr_orbit_t *sr = (sr_orbit_t *)calloc( max_n_sr_orbits,
                                        sizeof( sr_orbit_t));
 
-      n_sr_orbits = get_sr_orbits( sr, obs, n_obs, 0, max_n_sr_orbits, .5, 0., 0);
+      n_sr_orbits = get_sr_orbits( sr, obs, n_obs, 0, max_n_sr_orbits, max_sr_time, 0., 0);
       i = 0;
       while( (unsigned)i < n_sr_orbits && sr[i].score < .7)
          i++;
@@ -4321,7 +4323,7 @@ double initial_orbit( OBSERVE FAR *obs, int n_obs, double *orbit)
       while( n_sr_orbits > 3 && n_sr_orbits <= 10)
          {
          unsigned n = get_sr_orbits( sr + n_sr_orbits, obs, n_obs,
-                           rand( ), max_n_sr_orbits - n_sr_orbits, .5, 0., 0);
+                           rand( ), max_n_sr_orbits - n_sr_orbits, max_sr_time, 0., 0);
 
          i = 0;
          while( (unsigned)i < n_sr_orbits + n && sr[i].score < .7)

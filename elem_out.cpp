@@ -3403,15 +3403,21 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
       for( pass = 0; pass < 2; pass++)
          {
          const int64_t t0 = nanoseconds_since_1970( );
-         const int64_t QUARTER_SECOND = 250000000;
+         const char *timeout = get_environment_ptr( "IMPROVE_TIMEOUT");
+         const int64_t time_limit = (int64_t)( 1e+9 *
+                     (*timeout ? atof( timeout) : .25));  /* default 1/4 sec */
+         int max_steps = atoi( get_environment_ptr( "MAX_IMPROVE_STEPS"));
          const double mid_epoch = mid_epoch_of_arc( obs, n_obs);
 
+         if( !max_steps)
+            max_steps = 4;
          push_orbit( *orbit_epoch, orbit);
          integrate_orbit( orbit, *orbit_epoch, mid_epoch);
          *orbit_epoch = mid_epoch;
          if( !pass)
             prev_score = evaluate_initial_orbit( obs, n_obs, orbit, *orbit_epoch);
-         for( i = 0; i < 4 && (nanoseconds_since_1970( ) - t0) < QUARTER_SECOND; i++)
+         for( i = 0; i < max_steps && (time_limit <= 0
+                        || nanoseconds_since_1970( ) - t0 < time_limit); i++)
             {
             if( i)
                filter_obs( obs, n_obs, automatic_outlier_rejection_limit, 0);
