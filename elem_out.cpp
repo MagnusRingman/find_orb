@@ -3090,11 +3090,13 @@ static double extract_state_vect_from_text( const char *text,
       tbuff[i] = '\0';
       epoch = get_time_from_string( 0., tbuff, CALENDAR_JULIAN_GREGORIAN, NULL);
       }
-   assert( epoch);
+   if( !epoch)          /* no epoch,  or an unparseable one : */
+      return( 0.);      /* return zero to signal failure     */
    text += i + 1;
    for( i = 0; i < 6 && sscanf( text, "%lf%n", orbit + i, &bytes_read) == 1; i++)
       text += bytes_read + 1;
-   assert( i == 6 || i == 0);
+   if( i != 6 && i != 0)      /* partial state vector */
+      return( 0.);
    is_state_vector = (i == 6);
    memset( &elem, 0, sizeof( ELEMENTS));
    *abs_mag = 18.;
@@ -3187,6 +3189,8 @@ static double extract_state_vect_from_text( const char *text,
       }
    if( !is_state_vector)
       {
+      if( !(quantities_found & (FOUND_A | FOUND_Q)))
+         return( 0.);      /* no distance given;  can't make an orbit of it */
       elem.epoch = epoch;
       if( !(quantities_found & FOUND_TPERIH))
          elem.perih_time = elem.epoch;
