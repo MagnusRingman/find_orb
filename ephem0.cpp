@@ -4623,11 +4623,19 @@ void create_obs_file_with_computed_values( const OBSERVE FAR *obs,
 
    for( i = 0; i < n_obs; i++)
       {
-      tobs[i].obs_mag = tobs[i].computed_mag + mag_band_shift( tobs[i].mag_band, NULL);
+      if( tobs[i].computed_mag)
+         {
+         tobs[i].obs_mag = tobs[i].computed_mag + mag_band_shift( tobs[i].mag_band, NULL);
+         tobs[i].mag_precision = 2;
+         tobs[i].mag_band = 'V';
+         }
+      else           /* no abs mag known,  so no computed mag : leave blank */
+         {
+         tobs[i].obs_mag = BLANK_MAG;
+         tobs[i].mag_band = ' ';
+         }
       tobs[i].ra  = tobs[i].computed_ra;
       tobs[i].dec = tobs[i].computed_dec;
-      tobs[i].mag_precision = 2;
-      tobs[i].mag_band = 'V';
       }
    create_obs_file( tobs, n_obs, append, resid_format);
    free( tobs);

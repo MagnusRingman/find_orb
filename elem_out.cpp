@@ -3451,11 +3451,23 @@ static int fetch_previous_solution( OBSERVE *obs, const int n_obs, double *orbit
    else if( skip_full_improvement )
       {
       extern double override_abs_mag;
+      extern unsigned always_included_perturbers;
 
+               /* With no fit,  nothing turns perturbers on for us.  Use  */
+               /* the full planetary set,  as we do for a stored solution */
+               /* (an orbit handed to us was almost certainly computed    */
+               /* with perturbations,  and would be badly off without.)   */
+               /* If PERTURBERS was set explicitly,  though,  take that   */
+               /* as the model to use :  it lets one reproduce exactly    */
+               /* the model the orbit was fitted with.                    */
+      perturbers = (always_included_perturbers ? always_included_perturbers : 0x7fe);
       set_locs( orbit, *orbit_epoch, obs, n_obs);
-      override_abs_mag = abs_mag;
+               /* If an H was supplied with the orbit,  use it in    */
+               /* computing magnitudes,  rather than deriving one    */
+               /* from whatever magnitudes the observations may have */
+      if( state_vect_text && strstr( state_vect_text, "H="))
+         override_abs_mag = abs_mag;
       calc_absolute_magnitude( obs, n_obs);
-      override_abs_mag = 0.;
       }
                /* if a stored solution failed (i.e.,  didn't get sigmas), */
                /* we try again,  ignoring the stored solution.            */
