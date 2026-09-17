@@ -2893,7 +2893,8 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
       debug_printf( "Hit planet %d in full_improvement : %d\n",
                       planet_hit, set_locs_rval);
       runtime_message = NULL;
-      return( -4);
+      set_locs( orbit, epoch, obs, n_obs);   /* restore residuals zeroed above; */
+      return( -4);            /* otherwise a failed fit looks like a perfect one */
       }
 
    planet_orbiting = find_central_object( obs, epoch2, orbit2, tvect);
@@ -3158,6 +3159,7 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
       free( slopes);
       free( orig_obs);
       memcpy( orbit, original_orbit, n_orbit_params * sizeof( double));
+      set_locs( orbit, epoch, obs, n_obs);   /* restore residuals,  too */
       return( -1);
       }
 
@@ -3263,6 +3265,18 @@ int full_improvement( OBSERVE FAR *obs, int n_obs, double *orbit,
             i = 0;
          }
          while( !err_code && i);
+      if( err_code)
+         {        /* The step took us to an orbit we can't integrate (one */
+                  /* that hits the sun,  say).  Go back to the orbit we    */
+                  /* started with,  and restore its residuals :  we reset  */
+                  /* them to zero above,  and if we left it that way,  a   */
+                  /* failed fit would look like a perfect one.             */
+         memcpy( orbit, original_orbit, n_orbit_params * sizeof( double));
+         if( !loop && setting_outside_of_arc)
+            set_locs( orbit, epoch, obs - n_skipped_obs, n_total_obs);
+         else
+            set_locs( orbit, epoch, obs, n_obs);
+         }
       if( loop && !err_code)
          lsquare_free( lsquare);
       }
